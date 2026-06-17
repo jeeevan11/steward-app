@@ -230,6 +230,14 @@ def set_rule_status(conn: sqlite3.Connection, rule_id: int, status: str) -> None
     )
 
 
+def delete_rule(conn: sqlite3.Connection, rule_id: int) -> bool:
+    """Hard-delete a standing rule (any status). Used by the owner-facing "remove rule"
+    control. Returns True if a row was removed. An inferred rule can re-propose later from
+    fresh evidence — that's intended; this just clears it now."""
+    cur = conn.execute("DELETE FROM rules WHERE id=?", (int(rule_id),))
+    return cur.rowcount > 0
+
+
 def find_inferred_rule(
     conn: sqlite3.Connection, scope: str, match_key: str, action: str
 ) -> Optional[sqlite3.Row]:

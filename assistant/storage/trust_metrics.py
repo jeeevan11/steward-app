@@ -298,10 +298,14 @@ def compute(
         learn = _learning_counts(conn, since_epoch, until_epoch)
         pend = _pending_action_counts(conn, since_epoch, until_epoch)
 
-        # Approval rate: prefer explicit learning_events, fall back to pending_actions.
-        approve_n = learn["approve"] or pend["approved"]
-        surfaced_n = pend["surfaced"] or proc["approvals"]
-        approval_rate = round(approve_n / surfaced_n, 3) if surfaced_n else 0.0
+        # Approval rate: of the cards SURFACED for approval in the window, the fraction the
+        # owner approved. Numerator AND denominator both come from pending_actions (same rows,
+        # same created_at clock), so `approved` is a subset of `surfaced` and the rate can NEVER
+        # exceed 100%. (Prior code divided learning_events 'approve' (by ts, +1 per re-approval)
+        # by pending_actions 'surfaced' (a different table/clock), which let it read 104%+.)
+        surfaced_n = pend["surfaced"]
+        approved_n = min(pend["approved"], surfaced_n)
+        approval_rate = round(approved_n / surfaced_n, 3) if surfaced_n else 0.0
 
         # Draft acceptance: approve vs approve+edit+skip (from learning_events,
         # falling back to pending_actions outcomes).

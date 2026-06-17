@@ -604,6 +604,10 @@ final class StewardStore: ObservableObject {
     }
     func ruleConfirm(_ id: Int) { post("/api/rules/\(id)/confirm", body: nil); loadRules() }
     func ruleReject(_ id: Int) { post("/api/rules/\(id)/reject", body: nil); loadRules() }
+    func ruleDelete(_ id: Int) {
+        rules.removeAll { $0.id == id }
+        post("/api/rules/\(id)/delete", body: nil); loadRules()
+    }
 
     /// Update a contact's importance + VIP flag (People tab). Optimistic; reloads after.
     func contactUpdate(_ email: String, importance: Int, vip: Bool) {

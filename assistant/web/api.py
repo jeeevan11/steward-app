@@ -768,6 +768,18 @@ def api_rule_reject(rule_id: str, conn: sqlite3.Connection = Depends(get_conn)):
     return service.reject_rule(conn, rule_id)
 
 
+@app.post("/api/rules/{rule_id}/delete")
+def api_rule_delete(rule_id: str, conn: sqlite3.Connection = Depends(get_conn)):
+    """Remove a standing rule from the Active-rules list (any status)."""
+    try:
+        removed = repo.delete_rule(conn, int(rule_id))
+    except (TypeError, ValueError):
+        return {"ok": False, "error": "bad rule id"}
+    conn.commit()
+    _invalidate()
+    return {"ok": removed}
+
+
 @app.get("/api/audit-log")
 def api_audit_log(start: int = 0, end: int = 0, tier: Optional[int] = None,
                   contact: str = "", conn: sqlite3.Connection = Depends(get_conn)):

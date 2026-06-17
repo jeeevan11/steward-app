@@ -1041,7 +1041,7 @@ struct TrustCenterView: View {
 
             // ── Analytics (TODAY — last 24h, all real counts; "saved" is an estimate) ──
             Divider().overlay(Steward.C.line).padding(.vertical, Steward.S.xs)
-            sectionLabel("Analytics · today")
+            sectionLabel("Analytics · last 24h")
             // Honesty: when the engine is unreachable, hide the grid rather than render a wall
             // of zeros that looks like real data (a true quiet day must not look like an outage).
             if store.reachable {
@@ -1052,7 +1052,7 @@ struct TrustCenterView: View {
                     analytic("\(t.escalated)", "flagged you")
                     analytic("\(t.suppressed)", "suppressed")
                     analytic("\(t.approvals)", "approvals asked")
-                    analytic("\(Int(t.approvalRate * 100))%", "approval rate")
+                    analytic("\(min(100, Int(t.approvalRate * 100)))%", "approval rate")
                     analytic("\(Int(t.draftAcceptance * 100))%", "draft accepted")
                     analytic("\(t.decisionsAvoided)", "decisions avoided")
                     analytic(t.hoursSaved >= 1 ? "~\(t.hoursSaved)h" : "\(t.savedMinutes)m", "saved (est.)")
@@ -1116,10 +1116,16 @@ struct TrustCenterView: View {
             if !store.rules.isEmpty {
                 sectionLabel("Active rules").padding(.top, Steward.S.sm)
                 ForEach(store.rules) { r in
-                    HStack {
+                    HStack(spacing: 10) {
                         Text(r.rule).font(Steward.F.meta).foregroundColor(Steward.C.t2)
                         Spacer()
                         Text((r.learned ?? false) ? "Learned" : "You set").font(Steward.F.label).foregroundColor(Steward.C.t3)
+                        Button { store.ruleDelete(r.id) } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .font(Steward.F.meta).foregroundColor(Steward.C.t3)
+                        }
+                        .buttonStyle(.plain)
+                        .help("Remove this rule")
                     }.padding(.vertical, 8)
                 }
             }
