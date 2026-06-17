@@ -43,7 +43,7 @@ Telegram bot, scan a QR). See **[SETUP.md](SETUP.md)** for the exact, beginner-f
 Prefer to do it yourself? One script gets the basics running:
 
 ```bash
-git clone <your-repo-url> steward && cd steward
+git clone https://github.com/jeeevan11/steward-app.git steward && cd steward
 bash bootstrap.sh        # installs everything, creates your .env, runs the tests
 ```
 
