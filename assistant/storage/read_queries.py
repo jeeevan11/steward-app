@@ -167,7 +167,8 @@ def _contact_info(conn: sqlite3.Connection, sender_email: str) -> dict:
     """Lookup contact record; returns is_saved flag and relationship note."""
     try:
         row = conn.execute(
-            "SELECT importance, relationship, flags, reply_rate, notes FROM contacts WHERE email=?",
+            "SELECT importance, relationship, flags, reply_rate, notes, "
+            "       COALESCE(name_source,'') FROM contacts WHERE email=?",
             (sender_email or "",),
         ).fetchone()
         if row is None:
@@ -177,11 +178,15 @@ def _contact_info(conn: sqlite3.Connection, sender_email: str) -> dict:
         flags = row[2]
         reply_rate = float(row[3] or 0)
         notes = (row[4] or "").strip()
+        name_source = (row[5] or "").strip()
+        # name_source provenance: 'saved'/'business'/'manual' = a trustworthy, owner- or
+        # platform-verified name → always recognized (the @lid "unknown" bug fix).
+        is_trusted_name = name_source in ("saved", "business", "manual")
         # wa_contact = seen on WhatsApp (anyone who messaged); phone_contact = matched from
         # macOS Contacts. Only phone_contact or a user-set relationship counts as truly "saved."
         is_wa_contact = relationship == "wa_contact"
         is_phone_contact = relationship == "phone_contact"
-        is_saved = bool(is_phone_contact or (not is_wa_contact and relationship)
+        is_saved = bool(is_trusted_name or is_phone_contact or (not is_wa_contact and relationship)
                         or flags or (importance > 10) or (reply_rate > 0) or notes)
         if is_wa_contact and importance > 10:
             is_saved = True  # user explicitly boosted importance → treat as saved
@@ -190,6 +195,8 @@ def _contact_info(conn: sqlite3.Connection, sender_email: str) -> dict:
             note = relationship
         elif is_phone_contact:
             note = "Phone contact"
+        elif is_trusted_name:
+            note = "Saved contact"
         elif flags:
             note = ", ".join(sorted(f for f in (flags or []) if f))
         elif importance > 10:
@@ -558,6 +565,9 @@ def get_queue(conn: sqlite3.Connection, limit: int = 50) -> list[dict[str, Any]]
             "channel_label": CHANNEL_LABEL[ch],
             "channel_icon": CHANNEL_ICON[ch],
             "sender": sender_display,
+            # Raw identifier (the @lid/jid or email) — lets the Mac app "Save contact" an
+            # unknown sender straight from the card. Distinct from `sender` (display name).
+            "sender_identifier": d["sender_email"] or "",
             "is_saved": contact_info["is_saved"],
             "is_wa_contact": contact_info.get("is_wa_contact", False),
             "contact_note": contact_info["note"],
@@ -790,6 +800,7 @@ def list_contacts(conn: sqlite3.Connection, limit: int = 200) -> list[dict[str, 
     out = []
     for r in rows:
         flags = [f for f in (r["flags"] or "").split(",") if f]
+        info = _contact_info(conn, r["email"] or "")
         out.append({
             "name": r["name"] or r["email"],
             "email": r["email"],
@@ -802,6 +813,10 @@ def list_contacts(conn: sqlite3.Connection, limit: int = 200) -> list[dict[str, 
             "flags": flags,
             "you_reply_pct": round((r["reply_rate"] or 0.0) * 100),
             "messages": r["msg_count"] or 0,
+            # Recognition: is this a genuinely SAVED/known person, or an unsaved sender the
+            # owner can name + save in-app? name_source carries the provenance of the name.
+            "is_saved": bool(info.get("is_saved")),
+            "name_source": (r["name_source"] if "name_source" in r.keys() else "") or "",
         })
     return out
 

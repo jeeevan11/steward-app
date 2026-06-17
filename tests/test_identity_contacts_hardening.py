@@ -270,9 +270,12 @@ class TestPushNameRecognition(unittest.TestCase):
     def tearDown(self):
         self.conn.close()
 
-    def _sync(self, *, live=None, lid_map=None, cache=None, inbox=None):
+    def _sync(self, *, live=None, lid_map=None, cache=None, inbox=None, sources=None):
+        # live names from the relay are phonebook-grade → default provenance 'saved'.
+        live = live or {}
+        src = sources or {j: "saved" for j in live}
         with mock.patch.object(pc, "_fetch_relay_live",
-                               return_value=(live or {}, lid_map or {})), \
+                               return_value=(live, lid_map or {}, src)), \
              mock.patch.object(pc, "_read_cache_file", return_value=(cache or {})), \
              mock.patch.object(pc, "_read_inbox_names", return_value=(inbox or {})):
             return pc.sync(self.conn)

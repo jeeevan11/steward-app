@@ -54,9 +54,10 @@ def _relay_auth_headers() -> dict[str, str]:
     return {"X-Cos-Token": token} if token else {}
 
 
-def _fetch_relay_live() -> tuple[dict[str, str], dict[str, str]]:
+def _fetch_relay_live() -> tuple[dict[str, str], dict[str, str], dict[str, str]]:
     """GET /contacts from the relay's live in-memory cache.
-    Returns (jid→name, lid→phone_jid) maps."""
+    Returns (jid→name, lid→phone_jid, jid→name_source) maps. name_source is
+    'saved'|'business' for phonebook-grade names ('push' is filtered to '')."""
     try:
         req = urllib.request.Request(
             f"http://127.0.0.1:{RELAY_SEND_PORT}/contacts",
@@ -66,9 +67,11 @@ def _fetch_relay_live() -> tuple[dict[str, str], dict[str, str]]:
             data = json.loads(r.read().decode())
         names = {c["jid"].lower(): c["name"] for c in data.get("contacts", []) if c.get("jid") and c.get("name")}
         lid_map = {k.lower(): v.lower() for k, v in data.get("lid_jid_map", {}).items() if k and v}
-        return names, lid_map
+        sources = {c["jid"].lower(): (c.get("name_source") or "saved")
+                   for c in data.get("contacts", []) if c.get("jid") and c.get("name")}
+        return names, lid_map, sources
     except Exception:  # noqa: BLE001
-        return {}, {}
+        return {}, {}, {}
 
 
 def _read_cache_file() -> dict[str, str]:
@@ -120,7 +123,7 @@ def sync(conn: sqlite3.Connection) -> dict[str, int]:
     """Merge all WhatsApp name sources into the Steward contacts DB.
 
     Returns {"matched": N, "skipped": M, "sources": {...}}."""
-    live_names, lid_map = _fetch_relay_live()
+    live_names, lid_map, live_sources = _fetch_relay_live()
     cached = _read_cache_file()
     inbox = _read_inbox_names(conn)
 
@@ -132,12 +135,16 @@ def sync(conn: sqlite3.Connection) -> dict[str, int]:
     # — spoofable, and present for every stranger who messages once — so it must never
     # by itself confer recognition.
     phonebook: dict[str, str] = {}
+    phonebook_source: dict[str, str] = {}   # jid → 'saved'|'business' for phonebook names
     for jid, name in cached.items():
         if name:
             phonebook[jid] = name
+            phonebook_source[jid] = "saved"   # on-disk cache is phone-book grade
     for jid, name in live_names.items():
         if name:
             phonebook[jid] = name  # live relay wins over the on-disk snapshot
+            src = (live_sources.get(jid) or "saved")
+            phonebook_source[jid] = src if src in ("saved", "business") else "saved"
 
     # Merge for the NAME label only: phonebook > inbox (best quality wins). The
     # provenance (phonebook vs inbox-only) is tracked separately to gate recognition.
@@ -171,9 +178,18 @@ def sync(conn: sqlite3.Connection) -> dict[str, int]:
             current_meaningful = _is_meaningful_name(current_name)
             new_name = name if (name_ok and not current_meaningful) else current_name
             if is_phonebook:
-                # Phonebook source: apply the recognition floor as before.
+                # Phonebook source: apply the recognition floor as before, AND stamp a
+                # trustworthy name_source so is_saved()/is_recognized() recognize them even
+                # when importance stays at the floor (the "saved person reads as Unknown" fix).
                 new_rel = current_rel if (current_rel and current_rel != _RECOGNITION_REL) else _RECOGNITION_REL
                 new_imp = max(current_imp, _RECOGNITION_FLOOR)
+                new_src = phonebook_source.get(jid, "saved")
+                conn.execute(
+                    "UPDATE contacts SET name=?, relationship=?, importance=?, "
+                    "name_source=CASE WHEN name_source IN ('manual') THEN name_source ELSE ? END "
+                    "WHERE email=?",
+                    (new_name, new_rel, new_imp, new_src, jid),
+                )
             else:
                 # Inbox-only push_name: preserve whatever recognition the row ALREADY
                 # earned (from a prior phonebook sync, a user edit, or activity), but
@@ -183,22 +199,23 @@ def sync(conn: sqlite3.Connection) -> dict[str, int]:
                 if not (current_rel or current_imp > 0):
                     pushname_held += 1
                     _record_pushname_holdback(conn, jid, name)
-            conn.execute(
-                "UPDATE contacts SET name=?, relationship=?, importance=? WHERE email=?",
-                (new_name, new_rel, new_imp, jid),
-            )
+                conn.execute(
+                    "UPDATE contacts SET name=?, relationship=?, importance=? WHERE email=?",
+                    (new_name, new_rel, new_imp, jid),
+                )
         else:
             if is_phonebook:
                 conn.execute(
-                    "INSERT OR IGNORE INTO contacts (email, name, relationship, importance) VALUES (?,?,?,?)",
-                    (jid, name if name_ok else jid, _RECOGNITION_REL, _RECOGNITION_FLOOR),
+                    "INSERT OR IGNORE INTO contacts (email, name, relationship, importance, name_source) VALUES (?,?,?,?,?)",
+                    (jid, name if name_ok else jid, _RECOGNITION_REL, _RECOGNITION_FLOOR,
+                     phonebook_source.get(jid, "saved")),
                 )
             else:
-                # Inbox-only stranger: store the display label but with relationship=''
-                # and importance=0 so is_recognized() stays False (no spoofed 👤 marker).
+                # Inbox-only stranger: store the display label but with relationship='',
+                # importance=0 and name_source='push' so is_recognized() stays False.
                 conn.execute(
-                    "INSERT OR IGNORE INTO contacts (email, name, relationship, importance) VALUES (?,?,?,?)",
-                    (jid, name if name_ok else jid, "", 0),
+                    "INSERT OR IGNORE INTO contacts (email, name, relationship, importance, name_source) VALUES (?,?,?,?,?)",
+                    (jid, name if name_ok else jid, "", 0, "push"),
                 )
                 pushname_held += 1
                 _record_pushname_holdback(conn, jid, name)
@@ -226,15 +243,18 @@ def sync(conn: sqlite3.Connection) -> dict[str, int]:
                 "SELECT relationship, importance FROM contacts WHERE email=?", (key,)
             ).fetchone()
             if lid_name_is_phonebook:
+                lid_src = phonebook_source.get(lid) or phonebook_source.get(phone_jid) or "saved"
                 if existing:
                     conn.execute(
-                        "UPDATE contacts SET name=?, relationship=?, importance=MAX(importance,?) WHERE email=?",
-                        (lid_name, _RECOGNITION_REL, _RECOGNITION_FLOOR, key),
+                        "UPDATE contacts SET name=?, relationship=?, importance=MAX(importance,?), "
+                        "name_source=CASE WHEN name_source IN ('manual') THEN name_source ELSE ? END "
+                        "WHERE email=?",
+                        (lid_name, _RECOGNITION_REL, _RECOGNITION_FLOOR, lid_src, key),
                     )
                 else:
                     conn.execute(
-                        "INSERT OR IGNORE INTO contacts (email, name, relationship, importance) VALUES (?,?,?,?)",
-                        (key, lid_name, _RECOGNITION_REL, _RECOGNITION_FLOOR),
+                        "INSERT OR IGNORE INTO contacts (email, name, relationship, importance, name_source) VALUES (?,?,?,?,?)",
+                        (key, lid_name, _RECOGNITION_REL, _RECOGNITION_FLOOR, lid_src),
                     )
             else:
                 # Inbox-only name: set the display label but NEVER raise recognition.

@@ -168,6 +168,37 @@ def update_contact(conn: sqlite3.Connection, email: str, *, flags=None, importan
             "flags": sorted(contact.flags)}
 
 
+def save_contact(conn: sqlite3.Connection, identifier: str, name: str, phone: str = "") -> dict:
+    """Owner taps 'Save contact' in the Mac app: promote an unsaved/unknown sender to a
+    real, recognized contact. Writes recognition state only — never a message (NO_AUTO_SEND
+    is untouched). `identifier` is the WhatsApp @lid/jid or email; `phone` is optional and,
+    when given, bridges the @lid to the phone number so future messages resolve to this person."""
+    res = repo.save_contact(conn, identifier, name, phone=phone)
+    conn.commit()
+    if res.get("ok") and (identifier or "").lower().endswith("@lid"):
+        _notify_relay_lid_map(identifier, name, res.get("phone_jid", ""))
+    return res
+
+
+def _notify_relay_lid_map(lid: str, name: str, phone_jid: str = "") -> None:
+    """Best-effort: teach the WhatsApp relay the @lid↔number bridge + the saved name, so the
+    relay attaches the right name to future inbound messages. Non-fatal if the relay is down."""
+    try:
+        import json
+        import urllib.request
+
+        from assistant.memory import phone_contacts as pc
+        body = json.dumps({"lid": lid, "phone_jid": phone_jid or "",
+                           "name": name, "source": "manual"}).encode()
+        headers = {"Content-Type": "application/json", **pc._relay_auth_headers()}
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{pc.RELAY_SEND_PORT}/lid-map", data=body,
+            headers=headers, method="POST")
+        urllib.request.urlopen(req, timeout=3).read()
+    except Exception:  # noqa: BLE001 - relay may be offline; the DB bridge already suffices
+        log.debug("relay /lid-map notify failed (non-fatal)", exc_info=True)
+
+
 def rebuild_voice(conn: sqlite3.Connection, llm: Any, settings: Any) -> dict:
     """Trigger a per-segment voice rebuild. Dry-run safe: reports what it WOULD do
     without spending tokens; live actually rebuilds."""

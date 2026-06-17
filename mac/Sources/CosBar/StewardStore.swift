@@ -19,6 +19,10 @@ struct Decision: Identifiable, Decodable, Equatable {
     var quote: String = ""
     var category: String = "Other"
     var channel: String = "Email"
+    // Recognition + raw identifier, so an unknown sender can be saved straight from the card.
+    // Tolerant of an older server (defaults: known sender, no identifier).
+    var sender_identifier: String = ""
+    var is_saved: Bool = true
 
     /// ux-trust-2: kinds that are NOT a reply we'd send. A "reminder" is a proactive nudge
     /// (created by the relationship-reminder sweep) with no draft and a message_id that is a
@@ -44,6 +48,10 @@ struct Person: Identifiable, Decodable, Equatable {
     let importance: Int
     let is_vip: Bool
     var flags: [String] = []
+    // Recognition: false → an unsaved/unknown sender the owner can name + save in-app.
+    // Tolerant of an older server that doesn't send these (defaults to "saved/known").
+    var is_saved: Bool = true
+    var name_source: String = ""
 }
 
 struct Commitment: Identifiable, Decodable, Equatable {
@@ -614,6 +622,18 @@ final class StewardStore: ObservableObject {
         let enc = email.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? email
         postAny("/api/contacts/\(enc)/update", body: ["importance": importance, "flags": vip ? ["vip"] : []])
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in self?.refresh() }
+    }
+
+    /// Save an unknown/unsaved sender as a real contact: assigns a name (and optionally a
+    /// phone number that bridges a WhatsApp @lid to the number). Recognition-only — never
+    /// sends a message. Reloads People + refreshes once the server confirms.
+    func saveContact(identifier: String, name: String, phone: String = "",
+                     _ done: @escaping (Bool) -> Void = { _ in }) {
+        let body: [String: Any] = ["identifier": identifier, "name": name, "phone": phone]
+        postResult("/api/contacts/save", body: body) { [weak self] ok in
+            if ok { self?.refresh() }
+            done(ok)
+        }
     }
 
     func rebuildVoice() { post("/api/voice-profiles/rebuild", body: nil) }

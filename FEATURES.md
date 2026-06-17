@@ -32,6 +32,15 @@ Think of Steward as a chief of staff for your messages. Here's everything it doe
 - Remembers **what you promised people** ("you said you'd send the deck") and reminds you.
 - Builds a quiet memory of your relationships so its judgment gets better over time.
 
+### It knows who's who — and lets you fix it when it doesn't
+- Recognizes the people you've **saved** (phone-book and WhatsApp-verified names) so it never
+  treats a real contact as a stranger.
+- When someone is genuinely **unknown**, it says so plainly instead of guessing — an
+  **"Unknown" chip** appears on the card and in **People**.
+- One tap **"Save contact"**: give them a name (and, for WhatsApp, an optional phone number).
+  That links their WhatsApp ID to the number, so every future message is recognized too.
+  Saving only updates who-is-who — it **never sends anything**.
+
 ### It respects your attention
 - If you're **already handling a chat yourself**, it stays quiet about it.
 - You can mark people as **VIP** (always tell me) or **mute** (handle quietly) — but even a muted

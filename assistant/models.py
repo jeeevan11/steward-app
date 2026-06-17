@@ -89,9 +89,22 @@ class Contact:
     avg_response_seconds: Optional[float] = None
     msg_count: int = 0
     notes: str = ""                  # free-form: who they are, your commitments to them
+    name_source: str = ""            # saved|business|manual|push|unknown — provenance of `name`
 
     def has_flag(self, name: str) -> bool:
         return name in self.flags
+
+    @property
+    def is_saved(self) -> bool:
+        """A genuinely SAVED/known contact — never reads as 'unknown'. True when the name has
+        trustworthy provenance (phone book / WA-verified / owner saved in-app), or there is an
+        explicit relationship/flags signal. A bare push-name does NOT count (spoofable)."""
+        return bool(
+            self.name_source in ("saved", "business", "manual")
+            or (self.relationship or "").strip() == "phone_contact"
+            or self.flags
+            or (self.notes or "").strip()
+        )
 
     def is_vip(self, threshold: int) -> bool:
         """VIP = 'always-instant': bypasses the settling delay, never quieted, always

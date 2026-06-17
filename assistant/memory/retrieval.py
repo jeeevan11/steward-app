@@ -79,15 +79,23 @@ class RetrievedContext:
 
 def _profile_summary(contact: Contact) -> str:
     bits: list[str] = []
-    if contact.relationship:
-        bits.append(f"relationship: {contact.relationship}")
+    # Lead with an explicit recognition verdict so the judge never guesses "unknown sender"
+    # for someone the owner has actually saved. A bare push-name is NOT saved (spoofable).
+    if getattr(contact, "is_saved", False):
+        disp = (contact.name or "").strip()
+        bits.append(f"SAVED contact (a known person in your world){f', name: {disp}' if disp else ''}")
+    else:
+        bits.append("NOT a saved contact (unrecognized / unsaved sender)")
+    if contact.relationship and contact.relationship not in ("wa_contact",):
+        rel = "saved in contacts" if contact.relationship == "phone_contact" else contact.relationship
+        bits.append(f"relationship: {rel}")
     if contact.importance:
         bits.append(f"importance: {contact.importance}/100")
     if contact.reply_rate:
         bits.append(f"you reply to ~{round(contact.reply_rate * 100)}% of their mail")
     if contact.msg_count:
         bits.append(f"{contact.msg_count} prior messages")
-    return ("Profile: " + "; ".join(bits)) if bits else ""
+    return "Profile: " + "; ".join(bits)
 
 
 def _commitments_from_notes(notes: str) -> list[str]:

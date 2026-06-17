@@ -253,6 +253,12 @@ class ContactUpdateBody(BaseModel):
     importance: Optional[int] = None
 
 
+class ContactSaveBody(BaseModel):
+    identifier: str = ""          # WhatsApp @lid/jid or email of the sender to save
+    name: str = ""                # the name to assign
+    phone: str = ""               # optional: bridges an @lid to a phone number
+
+
 class SnoozeBody(BaseModel):
     days: int = 2
 
@@ -474,6 +480,7 @@ def api_decisions(conn: sqlite3.Connection = Depends(get_conn)):
         expl = explanations.get(conn, mid) or {}
         subject = ((d["subject"] if d else "") or "").strip()
         sender = ((d["sender_name"] or d["sender_email"]) if d else "") or ""
+        sender_email = ((d["sender_email"] if d else "") or "")
         title = subject if subject and subject != "(no subject)" else (sender or "A decision")
         sentence = (expl.get("summary") or (p["summary"] if "summary" in p.keys() else "") or "").strip()
         quote = (d["snippet"] if d else "") or ""
@@ -503,6 +510,11 @@ def api_decisions(conn: sqlite3.Connection = Depends(get_conn)):
             "category": category,
             "channel": channel,
             "sender": sender,
+            # Raw identifier + recognition, so the card can offer "Save contact" for an
+            # unknown sender. For a reminder with no decision_log row, the JID-keyed
+            # message_id IS the identifier.
+            "sender_identifier": sender_email or (mid if d is None else ""),
+            "is_saved": rq._contact_info(conn, sender_email or (mid if d is None else ""))["is_saved"],
         })
     return {"items": items}
 
@@ -749,6 +761,19 @@ def api_contact_update(email: str, body: ContactUpdateBody,
                        conn: sqlite3.Connection = Depends(get_conn)):
     _invalidate()
     return service.update_contact(conn, email, flags=body.flags, importance=body.importance)
+
+
+@app.post("/api/contacts/save")
+def api_contact_save(body: ContactSaveBody, conn: sqlite3.Connection = Depends(get_conn)):
+    """Save an unknown/unsaved sender as a real contact (name + optional phone bridge).
+    Recognition-only; never sends anything."""
+    ident = (body.identifier or "").strip()
+    name = (body.name or "").strip()
+    if not ident or not name:
+        return {"ok": False, "error": "identifier and name are required"}
+    res = service.save_contact(conn, ident, name, phone=(body.phone or "").strip())
+    _invalidate()
+    return res
 
 
 @app.get("/api/rules/proposed")

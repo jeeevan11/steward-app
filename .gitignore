@@ -38,3 +38,8 @@ venv/
 # Claude session / worktree state
 .claude/
 backups/
+
+# Local Mac build artifacts (the release zip is uploaded as a GitHub release asset, not committed)
+mac/Steward.app.zip
+mac/Steward.iconset/
+mac/Steward.icns

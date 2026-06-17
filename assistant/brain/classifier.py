@@ -231,9 +231,12 @@ def _is_first_contact(context: RetrievedContext) -> bool:
         return False
     if (c.relationship or "").strip():
         return False
-    if c.flags:
+    if c.flags or getattr(c, "is_saved", False):
         return False
-    if (context.memory_block or context.profile_summary or context.commitments
+    # NB: context.profile_summary is intentionally NOT a signal here — it now always carries
+    # an explicit recognition verdict (incl. "NOT a saved contact" for unknowns), so it is
+    # never empty. The real prior-relationship signals are the contact fields above plus these.
+    if (context.memory_block or context.commitments
             or context.rules or context.person_id):
         return False
     return True

@@ -338,6 +338,13 @@ struct DecisionDetailView: View {
     @ObservedObject var store = StewardStore.shared
     @State private var editing = false
     @State private var draft = ""
+    @State private var showSave = false
+
+    /// Offer "Save contact" only when this is a genuinely unknown sender we have an
+    /// identifier for (never for reminders, which are keyed by thread, not a person).
+    private var canSaveContact: Bool {
+        !decision.is_saved && !decision.sender_identifier.isEmpty && !decision.isReminder
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -365,7 +372,20 @@ struct DecisionDetailView: View {
                     // who / what kind / where — context, always there.
                     Text("From \(decision.sender.isEmpty ? "someone" : decision.sender) · \(decision.category) · \(decision.channel)")
                         .font(Steward.F.meta).foregroundColor(Steward.C.t3)
-                        .padding(.bottom, Steward.S.xl)
+                        .padding(.bottom, canSaveContact ? 8 : Steward.S.xl)
+
+                    // Unknown sender → let the owner name + save them right from the card.
+                    if canSaveContact {
+                        HStack(spacing: 8) {
+                            Text("UNKNOWN CONTACT").font(Steward.F.label).tracking(1)
+                                .foregroundColor(Steward.C.amber)
+                            Button { showSave = true } label: {
+                                Text("Save contact").font(Steward.F.meta).foregroundColor(Steward.C.canvas)
+                                    .padding(.horizontal, 10).padding(.vertical, 4)
+                                    .background(Steward.C.onLight).clipShape(RoundedRectangle(cornerRadius: 7))
+                            }.buttonStyle(.plain)
+                        }.padding(.bottom, Steward.S.xl)
+                    }
 
                     if !decision.sentence.isEmpty {
                         sectionLabel("Why this reached you")
@@ -463,6 +483,9 @@ struct DecisionDetailView: View {
                 .frame(maxWidth: 720)
                 .frame(maxWidth: .infinity)   // centre the column like the rest
             }
+        }
+        .sheet(isPresented: $showSave) {
+            SaveContactSheet(identifier: decision.sender_identifier, suggestedName: "")
         }
     }
 
@@ -871,10 +894,12 @@ struct PeopleView: View {
     }
 }
 
-/// One contact row with a live VIP toggle + Save (only when changed).
+/// One contact row with a live VIP toggle + Save (only when changed). Unsaved/unknown
+/// senders get an "Unknown" chip and a "Save contact" action that names them for good.
 struct EditablePersonRow: View {
     let ps: PersonState
     @State private var vip: Bool
+    @State private var showSave = false
     init(ps: PersonState) { self.ps = ps; _vip = State(initialValue: ps.person.is_vip) }
     var body: some View {
         HStack(spacing: 14) {
@@ -886,9 +911,24 @@ struct EditablePersonRow: View {
                 HStack(spacing: 6) {
                     if ps.tier > 0 { Circle().fill(Steward.accent(forTier: ps.tier)).frame(width: 6, height: 6) }
                     Text(ps.state).font(Steward.F.meta).foregroundColor(Steward.C.t3)
+                    if !ps.person.is_saved {
+                        Text("UNKNOWN").font(Steward.F.label).tracking(1)
+                            .foregroundColor(Steward.C.amber)
+                            .padding(.horizontal, 6).padding(.vertical, 2)
+                            .overlay(RoundedRectangle(cornerRadius: 5)
+                                .stroke(Steward.C.amber.opacity(0.4), lineWidth: 1))
+                    }
                 }
             }
             Spacer()
+            if !ps.person.is_saved {
+                Button { showSave = true } label: {
+                    Text("Save contact").font(Steward.F.meta).foregroundColor(Steward.C.canvas)
+                        .padding(.horizontal, 12).padding(.vertical, 6)
+                        .background(Steward.C.onLight).clipShape(RoundedRectangle(cornerRadius: 8))
+                }.buttonStyle(.plain)
+                .help("Name this person and save them, so Steward stops treating them as unknown.")
+            }
             Text("VIP").font(Steward.F.meta).foregroundColor(vip ? Steward.C.amber : Steward.C.t3)
             Toggle("", isOn: $vip).labelsHidden().toggleStyle(.switch)
             if vip != ps.person.is_vip {
@@ -901,6 +941,77 @@ struct EditablePersonRow: View {
         }
         .padding(.vertical, 12).padding(.horizontal, 8)
         .hoverHighlight(radius: 10)
+        .sheet(isPresented: $showSave) {
+            SaveContactSheet(identifier: ps.person.email,
+                             suggestedName: ps.person.is_saved ? ps.person.name : "")
+        }
+    }
+}
+
+/// "This is an unsaved contact — what would you like to name it?" A name (required) and an
+/// optional phone number that bridges a WhatsApp @lid to the real number so future messages
+/// resolve to this person. Saving only writes recognition state — it never sends anything.
+struct SaveContactSheet: View {
+    let identifier: String
+    let suggestedName: String
+    @Environment(\.dismiss) private var dismiss
+    @State private var name: String = ""
+    @State private var phone: String = ""
+    @State private var saving = false
+    @State private var failed = false
+
+    private var isWhatsApp: Bool { identifier.contains("@lid") || identifier.contains("@s.whatsapp.net") }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Steward.S.lg) {
+            Text("Save this contact").font(.system(size: 18, weight: .semibold))
+                .foregroundColor(Steward.C.tx)
+            Text("Steward doesn't recognize this sender yet. Give them a name and it will stop "
+                 + "treating them as unknown.").font(Steward.F.meta).foregroundColor(Steward.C.t3)
+                .fixedSize(horizontal: false, vertical: true)
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("NAME").font(Steward.F.label).tracking(1).foregroundColor(Steward.C.t3)
+                TextField("e.g. Nathan Diniz", text: $name).textFieldStyle(.roundedBorder)
+            }
+            if isWhatsApp {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("PHONE NUMBER (OPTIONAL)").font(Steward.F.label).tracking(1)
+                        .foregroundColor(Steward.C.t3)
+                    TextField("e.g. +1 415 555 0199", text: $phone).textFieldStyle(.roundedBorder)
+                    Text("Links this WhatsApp ID to a number so future messages are recognized too.")
+                        .font(Steward.F.meta).foregroundColor(Steward.C.t3)
+                }
+            }
+            if failed {
+                Text("Couldn't save — is the engine running?").font(Steward.F.meta)
+                    .foregroundColor(Steward.C.amber)
+            }
+            HStack {
+                Spacer()
+                Button("Cancel") { dismiss() }.buttonStyle(.plain).foregroundColor(Steward.C.t3)
+                Button {
+                    saving = true; failed = false
+                    StewardStore.shared.saveContact(
+                        identifier: identifier,
+                        name: name.trimmingCharacters(in: .whitespacesAndNewlines),
+                        phone: phone.trimmingCharacters(in: .whitespacesAndNewlines)
+                    ) { ok in
+                        saving = false
+                        if ok { dismiss() } else { failed = true }
+                    }
+                } label: {
+                    Text(saving ? "Saving…" : "Save contact").foregroundColor(Steward.C.canvas)
+                        .padding(.horizontal, 14).padding(.vertical, 7)
+                        .background(Steward.C.onLight).clipShape(RoundedRectangle(cornerRadius: 8))
+                }.buttonStyle(.plain)
+                .disabled(saving || name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .opacity(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? 0.5 : 1)
+            }
+        }
+        .padding(Steward.S.xl).frame(width: 380)
+        .background(Steward.C.canvas)
+        .onAppear { if name.isEmpty { name = suggestedName } }
     }
 }
 

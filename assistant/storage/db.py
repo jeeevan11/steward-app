@@ -98,6 +98,10 @@ CREATE TABLE IF NOT EXISTS contacts (
     sent_to_count        INTEGER NOT NULL DEFAULT 0,
     received_count       INTEGER NOT NULL DEFAULT 0,
     notes                TEXT DEFAULT '',
+    -- Provenance of `name`: decides how much we trust it as a real "saved contact" signal.
+    --   saved=phone-book name (c.name) · business=WA verified · manual=owner saved in-app
+    --   · push=sender's own display name (spoofable) · unknown=legacy/no provenance.
+    name_source          TEXT NOT NULL DEFAULT 'unknown',
     updated_at           INTEGER NOT NULL DEFAULT (strftime('%s','now'))
 );
 
@@ -209,6 +213,10 @@ CREATE TABLE IF NOT EXISTS persons (
     segment       TEXT DEFAULT '',
     relationship  TEXT DEFAULT '',
     relationship_type TEXT NOT NULL DEFAULT 'unknown',  -- partner|family|investor|mentor|collaborator|customer|recruiter|cold|unknown
+    -- 1 = the owner has SAVED this person (phone book / in-app Save Contact). Orthogonal to
+    -- relationship_type, so a person can be both 'saved' AND e.g. 'investor'. A saved person
+    -- never reads as "unknown".
+    is_saved_contact INTEGER NOT NULL DEFAULT 0,
     created_at    INTEGER NOT NULL DEFAULT (strftime('%s','now')),
     updated_at    INTEGER NOT NULL DEFAULT (strftime('%s','now'))
 );

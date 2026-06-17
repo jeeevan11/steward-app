@@ -147,6 +147,13 @@ const groupNameCache = new Map();
 // Persisted to disk so it survives restarts and grows over time.
 const CONTACT_CACHE_PATH = path.join(__dirname, "contact_cache.json");
 const contactNameCache = new Map();
+// Provenance of each cached name, so the engine can trust it (or not):
+//   'saved'    = the owner saved this person in their phone book (c.name)
+//   'business' = a WhatsApp Business verified name (c.verifiedName)
+//   'push'     = the sender's own self-chosen push name (c.notify) — spoofable, NOT trusted
+// jid(lower) → source. Kept parallel to contactNameCache (string-only) for back-compat.
+const CONTACT_SOURCE_PATH = path.join(__dirname, "contact_source.json");
+const contactSourceCache = new Map();
 (function loadContactCache() {
   try {
     const raw = fs.readFileSync(CONTACT_CACHE_PATH, "utf8");
@@ -155,6 +162,15 @@ const contactNameCache = new Map();
       if (jid && name) contactNameCache.set(jid.toLowerCase(), name);
     }
     log(`Loaded ${contactNameCache.size} contacts from cache.`);
+  } catch { /* first run or corrupt — start fresh */ }
+})();
+
+(function loadContactSourceCache() {
+  try {
+    const obj = JSON.parse(fs.readFileSync(CONTACT_SOURCE_PATH, "utf8"));
+    for (const [jid, src] of Object.entries(obj)) {
+      if (jid && src) contactSourceCache.set(jid.toLowerCase(), src);
+    }
   } catch { /* first run or corrupt — start fresh */ }
 })();
 
@@ -190,6 +206,10 @@ function scheduleContactCacheSave() {
       const obj = Object.fromEntries(contactNameCache);
       fs.writeFileSync(CONTACT_CACHE_PATH, JSON.stringify(obj, null, 2));
     } catch (e) { log("Failed to save contact cache:", String(e)); }
+    try {
+      const sobj = Object.fromEntries(contactSourceCache);
+      fs.writeFileSync(CONTACT_SOURCE_PATH, JSON.stringify(sobj, null, 2));
+    } catch (e) { log("Failed to save contact source cache:", String(e)); }
   }, 5000); // debounce 5s so rapid updates don't thrash disk
 }
 
@@ -358,8 +378,12 @@ async function buildPayload(sock, msg) {
   }
 
   // Prefer phone-saved contact name over pushName (sender's self-chosen name).
-  const savedName = contactNameCache.get((senderJid || "").toLowerCase()) || "";
+  const sjLower = (senderJid || "").toLowerCase();
+  const savedName = contactNameCache.get(sjLower) || "";
   const displayName = savedName || msg.pushName || "";
+  // Provenance of displayName: a cached 'saved'/'business' name is trustworthy; anything
+  // falling back to the raw pushName is 'push' (spoofable → the engine treats it as unknown).
+  const nameSource = savedName ? (contactSourceCache.get(sjLower) || "saved") : "push";
 
   // Resolve the real phone number — works for both regular JIDs and LID-alias JIDs.
   const phoneNumber = resolvePhoneNumber(senderJid);
@@ -369,6 +393,7 @@ async function buildPayload(sock, msg) {
     jid: remoteJid,
     sender_jid: senderJid,
     push_name: displayName,
+    push_name_source: nameSource,   // 'saved' | 'business' | 'push' — provenance of push_name
     phone_number: phoneNumber,   // '+919164536565' or null for unresolved LIDs
     body,
     media_type: mediaType,
@@ -721,7 +746,8 @@ function startSendServer(getSock) {
       for (const [jid, name] of contactNameCache.entries()) {
         if (name && name.trim()) {
           const phoneNumber = resolvePhoneNumber(jid);
-          out.push({ jid, name: name.trim(), phone_number: phoneNumber });
+          out.push({ jid, name: name.trim(), phone_number: phoneNumber,
+                     name_source: contactSourceCache.get(jid) || "saved" });
         }
       }
       const lidMap = Object.fromEntries(lidToJidMap);
@@ -746,6 +772,28 @@ function startSendServer(getSock) {
     req.on("end", async () => {
       let body;
       try { body = JSON.parse(raw || "{}"); } catch { res.writeHead(400); res.end('{"ok":false}'); return; }
+      // POST /lid-map — the Mac app "Save contact" teaches the relay an @lid↔number bridge
+      // and a trusted name, so future inbound messages resolve + show the saved name. No
+      // socket needed (pure local cache write), so handle it before the connected check.
+      if (req.url === "/lid-map") {
+        const lid = (body.lid || "").toLowerCase();
+        const phoneJid = (body.phone_jid || "").toLowerCase();
+        const name = (body.name || "").trim();
+        const source = (body.source || "saved");
+        if (!lid && !phoneJid) { res.writeHead(400); res.end('{"ok":false,"error":"lid or phone_jid required"}'); return; }
+        if (lid && phoneJid) { lidToJidMap.set(lid, phoneJid); jidToLidMap.set(phoneJid, lid); scheduleLidMapSave(); }
+        if (name) {
+          for (const k of [lid, phoneJid]) {
+            if (!k) continue;
+            contactNameCache.set(k, name);
+            contactSourceCache.set(k, source);
+          }
+          scheduleContactCacheSave();
+        }
+        log(`lid-map <- ${lid || "?"} ↔ ${phoneJid || "?"}${name ? ` (${name})` : ""}`);
+        res.writeHead(200); res.end('{"ok":true}');
+        return;
+      }
       const sock = getSock();
       if (!sock) { res.writeHead(503); res.end('{"ok":false,"error":"not connected"}'); return; }
       try {
@@ -860,16 +908,27 @@ async function connect() {
   sock.ev.on("creds.update", saveCreds);
 
   // Populate contactNameCache with phone-saved names from all contact/chat events.
-  // c.name  = what Jatin saved this person as in his phone
-  // c.notify = what they set as their WhatsApp push_name
-  // We prefer c.name (phone-book) over c.notify (their own choice).
+  // c.name        = what the owner saved this person as in their phone book  → 'saved'
+  // c.verifiedName = a WhatsApp Business verified display name                → 'business'
+  // c.notify      = what they set as their own WhatsApp push name (spoofable) → 'push'
+  // We prefer c.name (phone-book) over c.verifiedName over c.notify, and record WHICH
+  // one we used so the engine can trust a 'saved'/'business' name but treat 'push' as unknown.
   function cacheContact(c) {
-    // Prefer phone-book name (c.name) over WhatsApp push_name (c.notify).
-    const name = (c.name || "").trim() || (c.notify || "").trim() || (c.verifiedName || "").trim();
-    if (c.id && name) {
-      contactNameCache.set(c.id.toLowerCase(), name);
+    let name = (c.name || "").trim();
+    let source = name ? "saved" : "";
+    if (!name) { name = (c.verifiedName || "").trim(); if (name) source = "business"; }
+    if (!name) { name = (c.notify || "").trim(); if (name) source = "push"; }
+    function remember(key) {
+      const k = key.toLowerCase();
+      contactNameCache.set(k, name);
+      // Never downgrade a known 'saved'/'business' provenance to 'push'.
+      const prev = contactSourceCache.get(k);
+      if (!(prev === "saved" || prev === "business") || source === "saved" || source === "business") {
+        contactSourceCache.set(k, source);
+      }
       scheduleContactCacheSave();
     }
+    if (c.id && name) remember(c.id);
     // Build LID ↔ phone JID map.
     // Case A: c.id is a phone JID and c.lid is the linked alias.
     if (c.id && c.lid) {
@@ -878,14 +937,11 @@ async function connect() {
       lidToJidMap.set(lid, phoneJid);
       jidToLidMap.set(phoneJid, lid);
       // Also cache name under the LID so LID-sourced messages get the right name.
-      if (name) contactNameCache.set(lid, name);
+      if (name) remember(lid);
       scheduleLidMapSave();
     }
     // Case B: c.id is itself a LID (ends @lid) — store name under it too.
-    if (c.id && c.id.toLowerCase().endsWith("@lid") && name) {
-      contactNameCache.set(c.id.toLowerCase(), name);
-      scheduleContactCacheSave();
-    }
+    if (c.id && c.id.toLowerCase().endsWith("@lid") && name) remember(c.id);
   }
 
   sock.ev.on("contacts.upsert", (contacts) => {

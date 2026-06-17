@@ -80,6 +80,7 @@ def contact_from_row(row: sqlite3.Row) -> Contact:
         avg_response_seconds=row["avg_response_seconds"],
         msg_count=row["msg_count"] or 0,
         notes=row["notes"] or "",
+        name_source=(row["name_source"] if "name_source" in row.keys() else "") or "",
     )
 
 
@@ -101,15 +102,25 @@ def get_or_default_contact(conn: sqlite3.Connection, email: str, name: str = "")
 
 
 def upsert_contact(conn: sqlite3.Connection, contact: Contact) -> None:
+    # name_source is provenance-only: never DOWNGRADE a trustworthy source to a weaker one on
+    # a routine re-upsert (e.g. a later push-name message must not clobber a 'manual'/'saved'
+    # mark). COALESCE keeps the existing value unless the caller passes a non-empty one, and the
+    # CASE refuses to overwrite a trustworthy source with 'push'/'unknown'.
+    ns = (contact.name_source or "").strip()
     conn.execute(
         "INSERT INTO contacts (email, name, relationship, importance, flags, "
-        " reply_rate, avg_response_seconds, msg_count, notes, updated_at) "
-        "VALUES (?,?,?,?,?,?,?,?,?,strftime('%s','now')) "
+        " reply_rate, avg_response_seconds, msg_count, notes, name_source, updated_at) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,strftime('%s','now')) "
         "ON CONFLICT(email) DO UPDATE SET "
         " name=excluded.name, relationship=excluded.relationship, "
         " importance=excluded.importance, flags=excluded.flags, "
         " reply_rate=excluded.reply_rate, avg_response_seconds=excluded.avg_response_seconds, "
         " msg_count=excluded.msg_count, notes=excluded.notes, "
+        " name_source=CASE "
+        "   WHEN excluded.name_source IN ('saved','business','manual') THEN excluded.name_source "
+        "   WHEN contacts.name_source IN ('saved','business','manual') THEN contacts.name_source "
+        "   WHEN excluded.name_source != '' THEN excluded.name_source "
+        "   ELSE contacts.name_source END, "
         " updated_at=strftime('%s','now')",
         (
             contact.email.lower(),
@@ -121,6 +132,7 @@ def upsert_contact(conn: sqlite3.Connection, contact: Contact) -> None:
             contact.avg_response_seconds,
             contact.msg_count,
             contact.notes,
+            ns or "unknown",
         ),
     )
 
@@ -129,6 +141,99 @@ def add_contact_flag(conn: sqlite3.Connection, email: str, flag: str) -> None:
     c = get_or_default_contact(conn, email)
     c.flags.add(flag)
     upsert_contact(conn, c)
+
+
+_SAVE_IMPORTANCE_FLOOR = 20   # a saved contact is never below this (above the >10 "saved" gate)
+
+
+def save_contact(
+    conn: sqlite3.Connection, identifier: str, name: str, phone: str = "",
+) -> dict[str, Any]:
+    """Owner-asserted "Save this contact": the trustworthy source of truth for recognition.
+
+    Atomically marks `identifier` (a WhatsApp @lid/jid or email) as a SAVED contact — name +
+    relationship='phone_contact' + importance floor + name_source='manual' — and flips the
+    cross-channel PERSON to is_saved_contact=1 so it never reads as 'unknown' again. If a phone
+    number is given, the matching @s.whatsapp.net contact + person link is written too, which is
+    exactly the @lid↔number bridge the auto-pipeline can't derive. Writes recognition state ONLY
+    — never a message (NO_AUTO_SEND is untouched). Returns {ok, person_id, importance, phone_jid?}.
+    """
+    import uuid as _uuid
+
+    ident = (identifier or "").strip().lower()
+    nm = (name or "").strip()
+    if not ident or not nm:
+        return {"ok": False, "error": "identifier and name are required"}
+
+    def _save_one(key: str) -> None:
+        c = get_or_default_contact(conn, key, name=nm)
+        c.name = nm
+        c.relationship = "phone_contact"
+        c.importance = max(int(c.importance or 0), _SAVE_IMPORTANCE_FLOOR)
+        c.name_source = "manual"
+        upsert_contact(conn, c)
+
+    _save_one(ident)
+
+    # Resolve (or create) the cross-channel person and mark it saved.
+    pid = person_link_get(conn, ident)
+    if not pid:
+        pid = _uuid.uuid4().hex
+        is_jid = "@" in ident and not ("." in ident.split("@", 1)[1])  # jid-ish vs email
+        person_add(conn, person_id=pid, display_name=nm,
+                   emails=([] if is_jid else [ident]), phone_jids=([ident] if is_jid else []))
+        person_link_set(conn, ident, pid, confidence=1.0, source="manual")
+    else:
+        person_update(conn, pid, display_name=nm)
+    set_person_saved(conn, pid, True)
+
+    out: dict[str, Any] = {"ok": True, "person_id": pid,
+                           "importance": _SAVE_IMPORTANCE_FLOOR}
+    # Optional phone number → write the @s.whatsapp.net contact + link (the @lid↔number bridge).
+    digits = "".join(ch for ch in (phone or "") if ch.isdigit())
+    if digits:
+        phone_jid = f"{digits}@s.whatsapp.net"
+        _save_one(phone_jid)
+        if not person_link_get(conn, phone_jid):
+            person_link_set(conn, phone_jid, pid, confidence=1.0, source="manual")
+            p = person_get(conn, pid)
+            if p is not None:
+                jids = json.loads(p["phone_jids"] or "[]")
+                if phone_jid not in [j.lower() for j in jids]:
+                    jids.append(phone_jid)
+                    person_update(conn, pid, phone_jids=jids)
+        out["phone_jid"] = phone_jid
+    try:
+        record_event(conn, type="contact_saved_manual", contact_email=ident,
+                     detail={"name": nm, "person_id": pid, "phone_jid": out.get("phone_jid")})
+    except Exception:  # noqa: BLE001
+        pass
+    return out
+
+
+def set_person_saved(conn: sqlite3.Connection, person_id: str, saved: bool = True) -> None:
+    """Mark/unmark a person as a SAVED contact (orthogonal to relationship_type). Defensive
+    against a pre-migration DB without the column."""
+    if not person_id:
+        return
+    try:
+        conn.execute("UPDATE persons SET is_saved_contact=? WHERE id=?",
+                     (1 if saved else 0, person_id))
+    except sqlite3.OperationalError:
+        pass
+
+
+def person_is_saved(conn: sqlite3.Connection, person_id: str) -> bool:
+    """True if this person has been saved by the owner. Defensive (returns False pre-migration)."""
+    if not person_id:
+        return False
+    try:
+        row = conn.execute(
+            "SELECT is_saved_contact FROM persons WHERE id=?", (person_id,)
+        ).fetchone()
+    except sqlite3.OperationalError:
+        return False
+    return bool(row and row["is_saved_contact"])
 
 
 def bump_contact_stats(

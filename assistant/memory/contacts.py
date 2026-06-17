@@ -92,13 +92,22 @@ def recompute_importance(conn: sqlite3.Connection, email: str, *, now: int = 0) 
 
 
 def is_recognized(contact) -> bool:
-    """True if this is a KNOWN/saved contact (someone in Jatin's world), as opposed to
+    """True if this is a KNOWN/saved contact (someone in the owner's world), as opposed to
     an unsaved/unknown sender. 'Known' means we have a real signal of relationship —
-    a categorized relationship, a flag, an importance score, notes, or that Jatin has
+    a trustworthy name provenance (phone book / WA-verified / owner saved in-app), a
+    categorized relationship, a flag, an importance score, notes, or that the owner has
     replied to them before. A bare From-name does NOT count (it's spoofable / every
     email has one)."""
+    # contact.is_saved already covers name_source∈(saved,business,manual), phone_contact,
+    # flags and notes — the trustworthy-provenance half of recognition.
+    if getattr(contact, "is_saved", False):
+        return True
+    rel = (contact.relationship or "").strip()
+    # 'wa_contact' means only "someone who messaged on WhatsApp" — NOT a saved/known person.
+    # Counting it as recognized is the bug that disagrees with read_queries.is_saved.
+    rel_signal = bool(rel) and rel != "wa_contact"
     return bool(
-        (contact.relationship or "").strip()
+        rel_signal
         or contact.flags
         or (contact.importance or 0) > 0
         or (contact.reply_rate or 0) > 0
@@ -108,8 +117,13 @@ def is_recognized(contact) -> bool:
 
 def recognition_note(contact) -> str:
     """A short 'why we know them' descriptor for a known contact (for the card)."""
-    if (contact.relationship or "").strip():
-        return contact.relationship.strip()
+    rel = (contact.relationship or "").strip()
+    if getattr(contact, "name_source", "") in ("saved", "business", "manual") and (
+        not rel or rel in ("phone_contact", "wa_contact")
+    ):
+        return "saved contact"
+    if rel:
+        return rel
     if contact.flags:
         return ", ".join(sorted(f for f in contact.flags if f))
     if (contact.reply_rate or 0) > 0:

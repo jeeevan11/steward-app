@@ -69,6 +69,16 @@ def _migrate_pending_actions(conn: sqlite3.Connection) -> None:
 def _migrate_persons(conn: sqlite3.Connection) -> None:
     _add_column(conn, "persons", "relationship_type",
                 "relationship_type TEXT NOT NULL DEFAULT 'unknown'")
+    # Saved-contact recognition (orthogonal to relationship_type).
+    _add_column(conn, "persons", "is_saved_contact",
+                "is_saved_contact INTEGER NOT NULL DEFAULT 0")
+
+
+# Name provenance on contacts — decides whether a stored name is a trustworthy saved
+# contact (phone book / verified / in-app) or a spoofable self-set push name.
+def _migrate_contacts_name_source(conn: sqlite3.Connection) -> None:
+    _add_column(conn, "contacts", "name_source",
+                "name_source TEXT NOT NULL DEFAULT 'unknown'")
 
 
 # ── GAP 6 — person_id on commitments (for dedup keyed on the resolved person) ───
@@ -289,6 +299,7 @@ _MIGRATIONS = (
     _migrate_wa_messages,
     _migrate_operating_state,
     _migrate_contacts_response,
+    _migrate_contacts_name_source,
     _migrate_wa_inbox_opaque,
     _migrate_turn_id,
     _migrate_approval_integrity,
