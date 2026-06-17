@@ -20,6 +20,7 @@ from assistant.llm.client import LLMClient, LLMError
 from assistant.logging_setup import get_logger
 from assistant.models import Channel, Contact, FinalDecision, Thread
 from assistant.storage import metrics
+from assistant.storage import repositories as repo
 
 log = get_logger("drafting")
 
@@ -220,7 +221,8 @@ def draft_reply(
     On LLMError (or a missing prompt) returns a safe holding draft of placeholders.
     """
     try:
-        base_system = prompts.load("drafting", settings.prompts_dir)
+        base_system = prompts.load_and_render(
+            "drafting", settings.prompts_dir, owner_about=repo.get_owner_about(conn))
     except (FileNotFoundError, OSError) as exc:
         log.error("drafting prompt missing (%s); returning holding draft", exc)
         return _holding_draft(thread, final)

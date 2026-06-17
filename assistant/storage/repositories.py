@@ -41,6 +41,38 @@ def kv_set_bool(conn: sqlite3.Connection, key: str, value: bool) -> None:
     kv_set(conn, key, "1" if value else "0")
 
 
+# ── Owner self-context ("About you") ─────────────────────────────────────────
+# A free-text self-description the owner writes in Settings. It is rendered into the
+# TRUSTED system prefix of the triage + drafting prompts (never into the untrusted
+# message body), so the agent judges priority through the lens of who the owner
+# actually is and what matters to them right now. Single live-editable KV value, no
+# restart. It can RAISE relevance freely but can never lower a deterministic guardrail
+# floor — the cardinal "never auto-handle what needs you" rule holds regardless of text.
+OWNER_ABOUT_KEY = "owner_about"
+OWNER_ABOUT_MAX = 4000  # keep the prompt lean; long enough for a rich self-description
+OWNER_ABOUT_DEFAULT = (
+    "I'm a professional managing my own inbox. Until I personalize this in Settings, "
+    "use general judgment: real messages from real people that ask a question or need a "
+    "decision matter to me; bulk promotions, newsletters and automated notifications are "
+    "low priority. When unsure, surface it rather than hide it. I prefer clear, concise, "
+    "direct communication."
+)
+
+
+def get_owner_about(conn: sqlite3.Connection) -> str:
+    """The owner's self-description (Settings → About you), or a neutral default."""
+    v = (kv_get(conn, OWNER_ABOUT_KEY) or "").strip()
+    return v or OWNER_ABOUT_DEFAULT
+
+
+def set_owner_about(conn: sqlite3.Connection, text: str) -> str:
+    """Save the owner's self-description (trusted context). Trimmed + length-capped.
+    Empty clears it (reverts to the default). Returns the stored value."""
+    t = (text or "").strip()[:OWNER_ABOUT_MAX]
+    kv_set(conn, OWNER_ABOUT_KEY, t)
+    return t
+
+
 # Convenience for the well-known keys.
 def get_last_history_id(conn: sqlite3.Connection) -> Optional[str]:
     return kv_get(conn, "gmail_last_history_id")

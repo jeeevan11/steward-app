@@ -636,6 +636,26 @@ final class StewardStore: ObservableObject {
         }
     }
 
+    /// Owner self-context ("About you", Settings). Load the current description; the agent
+    /// uses it to judge priority. Saving takes effect on the next message (no restart).
+    func loadOwnerAbout(_ done: @escaping (String) -> Void) {
+        guard let url = URL(string: base + "/api/settings/about") else { done(""); return }
+        var req = URLRequest(url: url, timeoutInterval: 4)
+        let token = AppConfig.shared.envValue("CONSOLE_TOKEN") ?? ""
+        if !token.isEmpty { req.setValue(token, forHTTPHeaderField: "X-Cos-Token") }
+        URLSession.shared.dataTask(with: req) { data, _, _ in
+            var text = ""
+            if let data, let o = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                text = (o["about"] as? String) ?? ""
+            }
+            DispatchQueue.main.async { done(text) }
+        }.resume()
+    }
+
+    func saveOwnerAbout(_ text: String, _ done: @escaping (Bool) -> Void = { _ in }) {
+        postResult("/api/settings/about", body: ["about": text]) { ok in done(ok) }
+    }
+
     func rebuildVoice() { post("/api/voice-profiles/rebuild", body: nil) }
 
     /// The real agent on/off — pauses/resumes the engine via the API (works no matter how

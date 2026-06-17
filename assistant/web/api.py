@@ -259,6 +259,10 @@ class ContactSaveBody(BaseModel):
     phone: str = ""               # optional: bridges an @lid to a phone number
 
 
+class OwnerAboutBody(BaseModel):
+    about: str = ""               # the owner's free-text self-description
+
+
 class SnoozeBody(BaseModel):
     days: int = 2
 
@@ -772,6 +776,22 @@ def api_contact_save(body: ContactSaveBody, conn: sqlite3.Connection = Depends(g
     if not ident or not name:
         return {"ok": False, "error": "identifier and name are required"}
     res = service.save_contact(conn, ident, name, phone=(body.phone or "").strip())
+    _invalidate()
+    return res
+
+
+@app.get("/api/settings/about")
+def api_owner_about_get(conn: sqlite3.Connection = Depends(get_conn)):
+    """The owner's self-description (Settings → 'About you')."""
+    return service.get_owner_about(conn)
+
+
+@app.post("/api/settings/about")
+def api_owner_about_set(body: OwnerAboutBody, conn: sqlite3.Connection = Depends(get_conn)):
+    """Save the owner's self-description. Trusted context for triage + drafting; takes
+    effect on the next message, no restart. Owner-only (same localhost/owner posture as
+    every other write route). Never sends anything."""
+    res = service.set_owner_about(conn, body.about or "")
     _invalidate()
     return res
 

@@ -1137,6 +1137,9 @@ struct TrustCenterView: View {
     @State private var tSubject = ""
     @State private var tBody = ""
     @State private var tResult = ""
+    @State private var aboutText = ""
+    @State private var aboutLoaded = false
+    @State private var aboutSaved = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: Steward.S.lg) {
@@ -1149,6 +1152,41 @@ struct TrustCenterView: View {
                                                        set: { store.setPaused(!$0) }))
             row("Email", binding: Binding(get: { cfg.emailEnabled }, set: { engine.setEmail($0) }))
             row("WhatsApp", binding: Binding(get: { cfg.whatsappEnabled }, set: { engine.setWhatsApp($0) }))
+
+            // ── About you — owner self-context that shapes how Steward prioritizes ──
+            Divider().overlay(Steward.C.line).padding(.vertical, Steward.S.xs)
+            sectionLabel("About you")
+            Text("Tell Steward who you are and what matters to you. It uses this to judge what's "
+                 + "important — e.g. “I'm job-hunting, so recruiter emails are high priority.” "
+                 + "It can raise priority for what matters to you; it can never hide anything truly "
+                 + "critical. Takes effect on your next message.")
+                .font(Steward.F.meta).foregroundColor(Steward.C.t3).fixedSize(horizontal: false, vertical: true)
+                .padding(.bottom, 6)
+            TextEditor(text: $aboutText)
+                .font(Steward.F.body).foregroundColor(Steward.C.tx)
+                .scrollContentBackground(.hidden)
+                .frame(minHeight: 110)
+                .padding(10).background(Steward.C.raised).clipShape(RoundedRectangle(cornerRadius: 10))
+                .onChange(of: aboutText) { _ in aboutSaved = false }
+            HStack(spacing: 12) {
+                Button {
+                    store.saveOwnerAbout(aboutText) { ok in aboutSaved = ok }
+                } label: {
+                    Text("Save").font(Steward.F.meta).foregroundColor(Steward.C.canvas)
+                        .padding(.horizontal, 18).padding(.vertical, 9)
+                        .background(Steward.C.onLight).clipShape(RoundedRectangle(cornerRadius: 9))
+                }.buttonStyle(.plain)
+                .disabled(aboutText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                if aboutSaved {
+                    Text("Saved ✓").font(Steward.F.meta).foregroundColor(Steward.C.t2)
+                }
+            }
+            .onAppear {
+                if !aboutLoaded {
+                    aboutLoaded = true
+                    store.loadOwnerAbout { txt in aboutText = txt }
+                }
+            }
 
             // ── Analytics (TODAY — last 24h, all real counts; "saved" is an estimate) ──
             Divider().overlay(Steward.C.line).padding(.vertical, Steward.S.xs)

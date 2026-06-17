@@ -404,7 +404,8 @@ def classify_thread(
         judge_user += f"\n\n=== PREP (first-pass reading; context only) ===\n{prep_text}"
 
     try:
-        classifier_system = prompts.load("classifier", prompts_dir)
+        classifier_system = prompts.load_and_render(
+            "classifier", prompts_dir, owner_about=repo.get_owner_about(conn))
         decision_raw = client.classify(
             system_prefix=classifier_system,
             thread_text=judge_user,

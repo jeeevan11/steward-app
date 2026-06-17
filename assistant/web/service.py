@@ -153,6 +153,20 @@ def reject_rule(conn: sqlite3.Connection, rule_id: str) -> dict:
     return {"ok": repo.set_proposed_rule_status(conn, rule_id, "rejected")}
 
 
+def get_owner_about(conn: sqlite3.Connection) -> dict:
+    """The owner's self-description shown in Settings → 'About you'."""
+    return {"about": repo.get_owner_about(conn)}
+
+
+def set_owner_about(conn: sqlite3.Connection, text: str) -> dict:
+    """Save the owner's self-description (trusted context for triage + drafting). Takes
+    effect on the next message — no restart. Writes recognition/judgment context only;
+    never sends anything."""
+    stored = repo.set_owner_about(conn, text)
+    conn.commit()
+    return {"ok": True, "about": stored}
+
+
 def update_contact(conn: sqlite3.Connection, email: str, *, flags=None, importance=None) -> dict:
     """Update a contact's flags and/or importance floor (guarded upsert)."""
     contact = repo.get_or_default_contact(conn, email)
