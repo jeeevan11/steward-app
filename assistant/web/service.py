@@ -182,12 +182,14 @@ def update_contact(conn: sqlite3.Connection, email: str, *, flags=None, importan
             "flags": sorted(contact.flags)}
 
 
-def save_contact(conn: sqlite3.Connection, identifier: str, name: str, phone: str = "") -> dict:
+def save_contact(conn: sqlite3.Connection, identifier: str, name: str,
+                 phone: str = "", email: str = "") -> dict:
     """Owner taps 'Save contact' in the Mac app: promote an unsaved/unknown sender to a
     real, recognized contact. Writes recognition state only — never a message (NO_AUTO_SEND
-    is untouched). `identifier` is the WhatsApp @lid/jid or email; `phone` is optional and,
-    when given, bridges the @lid to the phone number so future messages resolve to this person."""
-    res = repo.save_contact(conn, identifier, name, phone=phone)
+    is untouched). `identifier` is the WhatsApp @lid/jid or email; `phone` and `email` are
+    optional owner-asserted identifiers that get bridged to the SAME person so all of their
+    channels resolve to one contact."""
+    res = repo.save_contact(conn, identifier, name, phone=phone, email=email)
     conn.commit()
     if res.get("ok") and (identifier or "").lower().endswith("@lid"):
         _notify_relay_lid_map(identifier, name, res.get("phone_jid", ""))

@@ -179,16 +179,18 @@ _SAVE_IMPORTANCE_FLOOR = 20   # a saved contact is never below this (above the >
 
 
 def save_contact(
-    conn: sqlite3.Connection, identifier: str, name: str, phone: str = "",
+    conn: sqlite3.Connection, identifier: str, name: str, phone: str = "", email: str = "",
 ) -> dict[str, Any]:
     """Owner-asserted "Save this contact": the trustworthy source of truth for recognition.
 
-    Atomically marks `identifier` (a WhatsApp @lid/jid or email) as a SAVED contact — name +
+    Marks `identifier` (a WhatsApp @lid/jid or email) as a SAVED contact — name +
     relationship='phone_contact' + importance floor + name_source='manual' — and flips the
-    cross-channel PERSON to is_saved_contact=1 so it never reads as 'unknown' again. If a phone
-    number is given, the matching @s.whatsapp.net contact + person link is written too, which is
-    exactly the @lid↔number bridge the auto-pipeline can't derive. Writes recognition state ONLY
-    — never a message (NO_AUTO_SEND is untouched). Returns {ok, person_id, importance, phone_jid?}.
+    cross-channel PERSON to is_saved_contact=1. A phone number and/or an email are bridged to
+    the SAME person via person_links ONLY (no duplicate visible contacts row — recognition of
+    a future inbound by that number/email flows through the person). The owner-asserted name is
+    propagated to every existing identifier of the person, so one edit names them all. Writes
+    recognition state ONLY — never a message (NO_AUTO_SEND is untouched).
+    Returns {ok, person_id, importance, phone_jid?, email?}.
     """
     import uuid as _uuid
 
@@ -219,25 +221,56 @@ def save_contact(
         person_update(conn, pid, display_name=nm)
     set_person_saved(conn, pid, True)
 
+    def _bridge(key: str, *, as_jid: bool) -> None:
+        """Link an extra identifier (phone JID / email) to this SAME person via person_links —
+        WITHOUT creating a separate visible contacts row. Skips it if it already belongs to a
+        different person (no silent cross-person steal)."""
+        key = (key or "").strip().lower()
+        if not key:
+            return
+        existing = person_link_get(conn, key)
+        if existing and existing != pid:
+            return
+        if not existing:
+            person_link_set(conn, key, pid, confidence=1.0, source="manual")
+        p = person_get(conn, pid)
+        if p is not None:
+            field = "phone_jids" if as_jid else "emails"
+            vals = json.loads(p[field] or "[]")
+            if key not in [v.lower() for v in vals]:
+                vals.append(key)
+                person_update(conn, pid, **{field: vals})
+
     out: dict[str, Any] = {"ok": True, "person_id": pid,
                            "importance": _SAVE_IMPORTANCE_FLOOR}
-    # Optional phone number → write the @s.whatsapp.net contact + link (the @lid↔number bridge).
+    # Optional phone number → @lid↔number bridge (person link only; no duplicate contacts row).
     digits = "".join(ch for ch in (phone or "") if ch.isdigit())
     if digits:
         phone_jid = f"{digits}@s.whatsapp.net"
-        _save_one(phone_jid)
-        if not person_link_get(conn, phone_jid):
-            person_link_set(conn, phone_jid, pid, confidence=1.0, source="manual")
-            p = person_get(conn, pid)
-            if p is not None:
-                jids = json.loads(p["phone_jids"] or "[]")
-                if phone_jid not in [j.lower() for j in jids]:
-                    jids.append(phone_jid)
-                    person_update(conn, pid, phone_jids=jids)
+        _bridge(phone_jid, as_jid=True)
         out["phone_jid"] = phone_jid
+    # Optional owner-asserted email → fold the same person's email identity in too.
+    em = (email or "").strip().lower()
+    if em and "@" in em:
+        _bridge(em, as_jid=False)
+        out["email"] = em
+
+    # Continuous sync: name every EXISTING contacts row that belongs to this person (so an edit
+    # propagates to all their identifiers). Only updates rows that already exist; never creates.
+    try:
+        for r in conn.execute("SELECT identifier FROM person_links WHERE person_id=?", (pid,)):
+            sib = (r["identifier"] or "").strip().lower()
+            if not sib or sib == ident:
+                continue
+            if conn.execute("SELECT 1 FROM contacts WHERE email=?", (sib,)).fetchone():
+                _save_one(sib)
+    except sqlite3.Error:
+        pass
+
     try:
         record_event(conn, type="contact_saved_manual", contact_email=ident,
-                     detail={"name": nm, "person_id": pid, "phone_jid": out.get("phone_jid")})
+                     detail={"name": nm, "person_id": pid, "phone_jid": out.get("phone_jid"),
+                             "email": out.get("email")})
     except Exception:  # noqa: BLE001
         pass
     return out

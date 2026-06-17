@@ -74,6 +74,55 @@ class TestSaveContact(unittest.TestCase):
         # a future inbound message that arrives by phone number is now recognized
         self.assertTrue(rq._contact_info(self.conn, phone_jid)["is_saved"])
 
+    # ── one person, not duplicate rows (the "two numbers" bug) ───────────────
+    def test_phone_bridge_makes_NO_duplicate_contacts_row(self):
+        self._seed_unknown_wa_sender()
+        res = repo.save_contact(self.conn, self.lid, "Nathan Diniz", phone="14155550199")
+        row = self.conn.execute(
+            "SELECT 1 FROM contacts WHERE email=?", (res["phone_jid"],)).fetchone()
+        self.assertIsNone(row, "save_contact must not create a duplicate @s.whatsapp.net row")
+        self.assertTrue(rq._contact_info(self.conn, res["phone_jid"])["is_saved"])
+
+    def test_people_list_shows_one_row_per_person(self):
+        self._seed_unknown_wa_sender()
+        repo.save_contact(self.conn, self.lid, "Nathan Diniz", phone="14155550199")
+        self.conn.commit()
+        rows = [p for p in rq.list_contacts(self.conn) if p["name"] == "Nathan Diniz"]
+        self.assertEqual(len(rows), 1, "the @lid + phone must collapse to ONE person row")
+        labels = [h["label"] for h in rows[0]["handles"]]
+        self.assertTrue(any("14155550199" in x for x in labels))
+
+    def test_owner_asserted_email_links_to_same_person(self):
+        self._seed_unknown_wa_sender()
+        em = "nathan.x@scaler.com"
+        c = repo.get_or_default_contact(self.conn, em, "")
+        repo.upsert_contact(self.conn, c)
+        res = repo.save_contact(self.conn, self.lid, "Nathan Diniz",
+                                phone="14155550199", email=em)
+        self.conn.commit()
+        self.assertEqual(repo.person_link_get(self.conn, em), res["person_id"])
+        self.assertTrue(rq._contact_info(self.conn, em)["is_saved"])
+        rows = [p for p in rq.list_contacts(self.conn) if p["name"] == "Nathan Diniz"]
+        self.assertEqual(len(rows), 1)
+
+    def test_live_name_resolves_saved_over_pushname(self):
+        self._seed_unknown_wa_sender()
+        self.assertEqual(rq._live_name(self.conn, self.lid), ("", False))
+        repo.save_contact(self.conn, self.lid, "Nathan Diniz")
+        nm, saved = rq._live_name(self.conn, self.lid)
+        self.assertEqual((nm, saved), ("Nathan Diniz", True))
+        self.assertEqual(
+            rq._display_name(self.conn, "Nathan", self.lid, "whatsapp"), "Nathan Diniz")
+
+    def test_unsaved_sender_still_uses_pushname_then_number(self):
+        jid = "8888@lid"
+        c = repo.get_or_default_contact(self.conn, jid, "SomeStranger")
+        c.relationship = "wa_contact"; c.name_source = "push"
+        repo.upsert_contact(self.conn, c)
+        self.assertEqual(rq._live_name(self.conn, jid), ("", False))
+        self.assertEqual(rq._display_name(self.conn, "SomeStranger", jid, "whatsapp"),
+                         "SomeStranger")
+
     def test_save_is_idempotent_and_never_downgrades(self):
         self._seed_unknown_wa_sender()
         first = repo.save_contact(self.conn, self.lid, "Nathan Diniz", phone="14155550199")

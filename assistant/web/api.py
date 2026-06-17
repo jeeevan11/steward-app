@@ -257,6 +257,7 @@ class ContactSaveBody(BaseModel):
     identifier: str = ""          # WhatsApp @lid/jid or email of the sender to save
     name: str = ""                # the name to assign
     phone: str = ""               # optional: bridges an @lid to a phone number
+    email: str = ""               # optional: links an email to the same person
 
 
 class OwnerAboutBody(BaseModel):
@@ -483,8 +484,11 @@ def api_decisions(conn: sqlite3.Connection = Depends(get_conn)):
         d = decision_log.get(conn, mid)
         expl = explanations.get(conn, mid) or {}
         subject = ((d["subject"] if d else "") or "").strip()
-        sender = ((d["sender_name"] or d["sender_email"]) if d else "") or ""
         sender_email = ((d["sender_email"] if d else "") or "")
+        # Live name: a saved person's name wins over the frozen push-name captured at ingest,
+        # so saving a contact updates this card on the next poll (no re-ingest).
+        _live_sender, _ = rq._live_name(conn, sender_email or (mid if d is None else ""))
+        sender = _live_sender or (((d["sender_name"] or d["sender_email"]) if d else "") or "")
         title = subject if subject and subject != "(no subject)" else (sender or "A decision")
         sentence = (expl.get("summary") or (p["summary"] if "summary" in p.keys() else "") or "").strip()
         quote = (d["snippet"] if d else "") or ""
@@ -499,7 +503,8 @@ def api_decisions(conn: sqlite3.Connection = Depends(get_conn)):
             meta = repo.get_reminder_meta(conn, p["idempotency_key"]) \
                 if "idempotency_key" in p.keys() else None
             if meta is not None:
-                if (meta["sender_name"] or "").strip():
+                # Keep the live saved name if we resolved one; else use the reminder's stamp.
+                if not _live_sender and (meta["sender_name"] or "").strip():
                     sender = meta["sender_name"].strip()
                 if (meta["quote"] or "").strip():
                     quote = meta["quote"].strip()
@@ -775,7 +780,8 @@ def api_contact_save(body: ContactSaveBody, conn: sqlite3.Connection = Depends(g
     name = (body.name or "").strip()
     if not ident or not name:
         return {"ok": False, "error": "identifier and name are required"}
-    res = service.save_contact(conn, ident, name, phone=(body.phone or "").strip())
+    res = service.save_contact(conn, ident, name, phone=(body.phone or "").strip(),
+                               email=(body.email or "").strip())
     _invalidate()
     return res
 

@@ -919,6 +919,16 @@ struct EditablePersonRow: View {
                                 .stroke(Steward.C.amber.opacity(0.4), lineWidth: 1))
                     }
                 }
+                // Every number / email / WhatsApp id this person has — grouped under ONE name,
+                // so the same human is never shown as two contacts.
+                if ps.person.is_saved {
+                    let labels = ps.person.handles.map { $0.label }.filter { !$0.isEmpty }
+                    if labels.count > 1 || (labels.count == 1 && labels[0] != "WhatsApp") {
+                        Text(labels.joined(separator: "  ·  "))
+                            .font(Steward.F.label).foregroundColor(Steward.C.t3.opacity(0.85))
+                            .lineLimit(1).truncationMode(.middle)
+                    }
+                }
             }
             Spacer()
             if !ps.person.is_saved {
@@ -957,6 +967,7 @@ struct SaveContactSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var name: String = ""
     @State private var phone: String = ""
+    @State private var email: String = ""
     @State private var saving = false
     @State private var failed = false
 
@@ -982,6 +993,13 @@ struct SaveContactSheet: View {
                     Text("Links this WhatsApp ID to a number so future messages are recognized too.")
                         .font(Steward.F.meta).foregroundColor(Steward.C.t3)
                 }
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("EMAIL (OPTIONAL)").font(Steward.F.label).tracking(1)
+                        .foregroundColor(Steward.C.t3)
+                    TextField("e.g. nathan@company.com", text: $email).textFieldStyle(.roundedBorder)
+                    Text("Connects their email to the same person, so email + WhatsApp are one contact.")
+                        .font(Steward.F.meta).foregroundColor(Steward.C.t3)
+                }
             }
             if failed {
                 Text("Couldn't save — is the engine running?").font(Steward.F.meta)
@@ -995,7 +1013,8 @@ struct SaveContactSheet: View {
                     StewardStore.shared.saveContact(
                         identifier: identifier,
                         name: name.trimmingCharacters(in: .whitespacesAndNewlines),
-                        phone: phone.trimmingCharacters(in: .whitespacesAndNewlines)
+                        phone: phone.trimmingCharacters(in: .whitespacesAndNewlines),
+                        email: email.trimmingCharacters(in: .whitespacesAndNewlines)
                     ) { ok in
                         saving = false
                         if ok { dismiss() } else { failed = true }

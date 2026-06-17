@@ -141,11 +141,50 @@ def _wa_phone(jid: str) -> str:
     return local or jid
 
 
-def _display_name(sender_name: str, sender_email: str, channel: str,
-                  phone_number: str | None = None) -> str:
-    """Best human-readable display name. Falls back to phone number for WhatsApp
-    contacts whose push_name is blank or meaningless (dots, single char, etc.).
+def _live_name(conn: sqlite3.Connection, identifier: str) -> tuple[str, bool]:
+    """Single source of truth: identifier → (live_display_name, is_saved).
+
+    Resolve the identifier (an @lid / @s.whatsapp.net / email) to its cross-channel PERSON
+    and prefer the owner-asserted name, so one save propagates to every surface (home cards,
+    People, history) on the next render — no re-ingest. Returns ('', False) when there is no
+    saved/trusted name, so callers keep their existing push-name→number fallback UNCHANGED
+    (the unsaved/unknown path is never altered)."""
+    ident = (identifier or "").strip().lower()
+    if not ident:
+        return "", False
+    dn = ""
+    try:
+        pid = repo.person_link_get(conn, ident)
+        if pid:
+            prow = repo.person_get(conn, pid)
+            dn = ((prow["display_name"] if prow else "") or "").strip()
+            if repo.person_is_saved(conn, pid) and dn:
+                return dn, True   # owner-saved person: their name wins over any push-name
+        # A trusted contacts.name (manual/saved/business) even without a person row.
+        r = conn.execute(
+            "SELECT name, COALESCE(name_source,'') FROM contacts WHERE email=?", (ident,)
+        ).fetchone()
+        if r and (r[0] or "").strip() and r[1] in ("saved", "business", "manual"):
+            return r[0].strip(), True
+        if pid and repo.person_is_saved(conn, pid):
+            return dn, True       # saved person, empty display_name → still saved
+    except sqlite3.Error:
+        pass
+    return "", False
+
+
+def _display_name(conn: sqlite3.Connection, sender_name: str, sender_email: str,
+                  channel: str, phone_number: str | None = None) -> str:
+    """Best human-readable display name. Prefers the live saved/person name (so a saved
+    contact's name shows everywhere the moment it's saved), then falls back to the push-name,
+    then the phone number for WhatsApp contacts whose push_name is blank/meaningless.
     `phone_number` is the relay-resolved real phone ('+919164536565') for LID contacts."""
+    # Live person/saved name wins — BEFORE the meaningful-push-name check, so a saved
+    # "Aastik Nayyar" beats the push-name "Aastik". Only fires for saved/trusted identities;
+    # unsaved senders fall straight through to the original fallback below.
+    live, _ = _live_name(conn, sender_email)
+    if live:
+        return live
     if _is_meaningful_name(sender_name):
         return sender_name
     if channel == "whatsapp":
@@ -172,6 +211,14 @@ def _contact_info(conn: sqlite3.Connection, sender_email: str) -> dict:
             (sender_email or "",),
         ).fetchone()
         if row is None:
+            # No per-identifier row, but it may resolve to a SAVED person (e.g. a phone JID
+            # with only the person_links bridge). Recognize via the person.
+            try:
+                _pid = repo.person_link_get(conn, sender_email or "")
+                if _pid and repo.person_is_saved(conn, _pid):
+                    return {"is_saved": True, "note": "Saved contact", "is_wa_contact": False}
+            except sqlite3.Error:
+                pass
             return {"is_saved": False, "note": ""}
         importance = int(row[0] or 0)
         relationship = (row[1] or "").strip()
@@ -190,6 +237,17 @@ def _contact_info(conn: sqlite3.Connection, sender_email: str) -> dict:
                         or flags or (importance > 10) or (reply_rate > 0) or notes)
         if is_wa_contact and importance > 10:
             is_saved = True  # user explicitly boosted importance → treat as saved
+        # Person-level recognition: if this identifier resolves to a SAVED person, it's
+        # recognized even if THIS row lacks the manual/phone_contact stamp. This is what
+        # lets a future inbound by a bare phone number be recognized via the person (so the
+        # separate @s.whatsapp.net contacts row is no longer needed).
+        if not is_saved:
+            try:
+                _pid = repo.person_link_get(conn, sender_email or "")
+                if _pid and repo.person_is_saved(conn, _pid):
+                    is_saved = True
+            except sqlite3.Error:
+                pass
         # Human-readable note
         if relationship and relationship not in ("wa_contact", "phone_contact"):
             note = relationship
@@ -203,6 +261,8 @@ def _contact_info(conn: sqlite3.Connection, sender_email: str) -> dict:
             note = f"importance {importance}"
         else:
             note = ""
+        if is_saved and not note:
+            note = "Saved contact"
         return {"is_saved": is_saved, "note": note, "is_wa_contact": is_wa_contact}
     except Exception:  # noqa: BLE001
         return {"is_saved": False, "note": ""}
@@ -426,7 +486,8 @@ def get_pipeline(conn: sqlite3.Connection) -> dict[str, Any]:
     if latest:
         d = latest[0]
         last = {
-            "who": d["sender_name"] or d["sender_email"] or "someone",
+            "who": (_live_name(conn, d["sender_email"] or "")[0]
+                    or d["sender_name"] or d["sender_email"] or "someone"),
             "subject": d["subject"] or "(no subject)",
             "label": _tier_label(d["final_tier"]),
             "at": d["ts"],
@@ -556,7 +617,7 @@ def get_queue(conn: sqlite3.Connection, limit: int = 50) -> list[dict[str, Any]]
 
         # Pull relay-resolved phone number for LID contacts (NULL for regular phone JIDs)
         _phone_number = _wa_phone_number(conn, d["message_id"]) if ch == "whatsapp" else None
-        sender_display = _display_name(d["sender_name"] or "", d["sender_email"] or "", ch,
+        sender_display = _display_name(conn, d["sender_name"] or "", d["sender_email"] or "", ch,
                                        phone_number=_phone_number)
         contact_info = _contact_info(conn, d["sender_email"] or "")
         item = {
@@ -710,7 +771,7 @@ def get_email(conn: sqlite3.Connection, message_id: str) -> Optional[dict[str, A
     raw_name = d["sender_name"] or ""
     # Pull relay-resolved phone number for LID contacts
     _phone_number2 = _wa_phone_number(conn, message_id) if ch == "whatsapp" else None
-    display = _display_name(raw_name, sender_email, ch, phone_number=_phone_number2)
+    display = _display_name(conn, raw_name, sender_email, ch, phone_number=_phone_number2)
     contact_info = _contact_info(conn, sender_email)
     detail: dict[str, Any] = {
         "message_id": message_id,
@@ -792,33 +853,128 @@ def get_pipeline_detail(conn: sqlite3.Connection, message_id: str) -> Optional[d
 # ─────────────────────────────────────────────────────────────────────────────
 # Footer tabs: people, rules, today's audit
 # ─────────────────────────────────────────────────────────────────────────────
+def _handle_kind(identifier: str) -> str:
+    e = (identifier or "").lower()
+    if e.endswith("@lid"):
+        return "whatsapp"
+    if e.endswith("@s.whatsapp.net") or e.endswith("@g.us"):
+        return "phone"
+    if "@" in e:
+        return "email"
+    return "other"
+
+
+def _handle_label(conn: sqlite3.Connection, identifier: str) -> str:
+    """Human-readable label for one of a person's identifiers (the number, the email, etc.)."""
+    e = identifier or ""
+    kind = _handle_kind(e)
+    if kind == "email":
+        return e
+    if kind == "phone":
+        digits = "".join(c for c in e.split("@")[0] if c.isdigit())
+        return f"+{digits}" if digits else e
+    if kind == "whatsapp":
+        ph = _wa_phone(e)
+        return ph or "WhatsApp"
+    return e
+
+
 def list_contacts(conn: sqlite3.Connection, limit: int = 200) -> list[dict[str, Any]]:
+    """One row per PERSON (not per identifier): a saved person's @lid + phone number + email
+    collapse into a single entry with the saved name and their identifiers grouped under
+    `handles`. Contacts with no linked person stay as their own single-handle entry, so the
+    unsaved/unknown path is unchanged. Saving a name propagates here live (name resolves from
+    the person), so one edit shows everywhere."""
     rows = conn.execute(
-        "SELECT * FROM contacts ORDER BY importance DESC, reply_rate DESC, msg_count DESC LIMIT ?",
-        (limit,),
+        "SELECT * FROM contacts ORDER BY importance DESC, reply_rate DESC, msg_count DESC"
     ).fetchall()
-    out = []
+
+    groups: dict[str, dict[str, Any]] = {}
+    order: list[str] = []
     for r in rows:
-        flags = [f for f in (r["flags"] or "").split(",") if f]
-        info = _contact_info(conn, r["email"] or "")
+        email = r["email"] or ""
+        pid = None
+        try:
+            pid = repo.person_link_get(conn, email)
+        except Exception:  # noqa: BLE001
+            pid = None
+        key = f"p:{pid}" if pid else f"e:{email.lower()}"
+        if key not in groups:
+            groups[key] = {"pid": pid, "rows": []}
+            order.append(key)
+        groups[key]["rows"].append(r)
+
+    def _primary(rs: list) -> Any:
+        def rank(x):
+            ns = (x["name_source"] if "name_source" in x.keys() else "") or ""
+            rel = (x["relationship"] or "")
+            return (
+                0 if ns in ("manual", "saved", "business") else 1,
+                0 if rel == "phone_contact" else 1,
+                0 if _is_meaningful_name(x["name"] or "") else 1,
+            )
+        return sorted(rs, key=rank)[0]
+
+    out = []
+    for key in order:
+        g = groups[key]
+        rs = g["rows"]
+        pid = g["pid"]
+        primary = _primary(rs)
+        prim_email = primary["email"] or ""
+
+        importance = max((int(x["importance"] or 0) for x in rs), default=0)
+        messages = sum(int(x["msg_count"] or 0) for x in rs)
+        reply_rate = max((float(x["reply_rate"] or 0.0) for x in rs), default=0.0)
+        flags = sorted({f for x in rs for f in ((x["flags"] or "").split(",")) if f})
+        is_saved = any(_contact_info(conn, x["email"] or "").get("is_saved") for x in rs)
+
+        person_name = ""
+        if pid:
+            try:
+                prow = repo.person_get(conn, pid)
+                person_name = ((prow["display_name"] if prow else "") or "").strip()
+                if not is_saved and repo.person_is_saved(conn, pid):
+                    is_saved = True
+            except Exception:  # noqa: BLE001
+                pass
+        name = person_name if (is_saved and person_name) else (primary["name"] or prim_email)
+
+        handles = [
+            {"id": (x["email"] or ""), "kind": _handle_kind(x["email"] or ""),
+             "label": _handle_label(conn, x["email"] or "")}
+            for x in rs if (x["email"] or "")
+        ]
+        if pid:
+            seen = {h["id"].lower() for h in handles}
+            try:
+                for lr in conn.execute(
+                    "SELECT identifier FROM person_links WHERE person_id=?", (pid,)):
+                    hid = (lr["identifier"] or "")
+                    if hid and hid.lower() not in seen:
+                        handles.append({"id": hid, "kind": _handle_kind(hid),
+                                        "label": _handle_label(conn, hid)})
+                        seen.add(hid.lower())
+            except sqlite3.Error:
+                pass
         out.append({
-            "name": r["name"] or r["email"],
-            "email": r["email"],
-            "relationship": r["relationship"] or "",
-            # GAP 1: the inferred cross-channel relationship_type (drives importance floors
-            # + guardrails). Resolved from the person linked to this contact's email.
-            "relationship_type": repo.relationship_type_for_identifier(conn, r["email"] or ""),
-            "importance": r["importance"] or 0,
-            "is_vip": (r["importance"] or 0) >= 70 or "vip" in flags,
+            "name": name,
+            "email": prim_email,
+            "person_id": pid or "",
+            "handles": handles,
+            "relationship": primary["relationship"] or "",
+            "relationship_type": repo.relationship_type_for_identifier(conn, prim_email),
+            "importance": importance,
+            "is_vip": importance >= 70 or "vip" in flags,
             "flags": flags,
-            "you_reply_pct": round((r["reply_rate"] or 0.0) * 100),
-            "messages": r["msg_count"] or 0,
-            # Recognition: is this a genuinely SAVED/known person, or an unsaved sender the
-            # owner can name + save in-app? name_source carries the provenance of the name.
-            "is_saved": bool(info.get("is_saved")),
-            "name_source": (r["name_source"] if "name_source" in r.keys() else "") or "",
+            "you_reply_pct": round(reply_rate * 100),
+            "messages": messages,
+            "is_saved": bool(is_saved),
+            "name_source": (primary["name_source"] if "name_source" in primary.keys() else "") or "",
         })
-    return out
+
+    out.sort(key=lambda i: (-i["importance"], -i["messages"]))
+    return out[:limit]
 
 
 def list_rules(conn: sqlite3.Connection) -> list[dict[str, Any]]:

@@ -40,8 +40,16 @@ struct Decision: Identifiable, Decodable, Equatable {
     var isReminder: Bool { Decision.nonSendKinds.contains(kind) }
 }
 
+struct Handle: Decodable, Equatable, Hashable {
+    let id: String          // the raw identifier (@lid / @s.whatsapp.net / email)
+    var kind: String = ""   // "whatsapp" | "phone" | "email" | "other"
+    var label: String = ""  // human-readable: the number, the email, or "WhatsApp"
+}
+
 struct Person: Identifiable, Decodable, Equatable {
-    var id: String { email }
+    // One row per PERSON: prefer the cross-channel person_id so a saved person is stable
+    // even as identifiers merge; fall back to email for an older server / unlinked contact.
+    var id: String { person_id.isEmpty ? email : person_id }
     let name: String
     let email: String
     let relationship: String
@@ -52,6 +60,8 @@ struct Person: Identifiable, Decodable, Equatable {
     // Tolerant of an older server that doesn't send these (defaults to "saved/known").
     var is_saved: Bool = true
     var name_source: String = ""
+    var person_id: String = ""
+    var handles: [Handle] = []   // every number/email/WhatsApp id grouped under this person
 }
 
 struct Commitment: Identifiable, Decodable, Equatable {
@@ -627,9 +637,10 @@ final class StewardStore: ObservableObject {
     /// Save an unknown/unsaved sender as a real contact: assigns a name (and optionally a
     /// phone number that bridges a WhatsApp @lid to the number). Recognition-only — never
     /// sends a message. Reloads People + refreshes once the server confirms.
-    func saveContact(identifier: String, name: String, phone: String = "",
+    func saveContact(identifier: String, name: String, phone: String = "", email: String = "",
                      _ done: @escaping (Bool) -> Void = { _ in }) {
-        let body: [String: Any] = ["identifier": identifier, "name": name, "phone": phone]
+        let body: [String: Any] = ["identifier": identifier, "name": name,
+                                   "phone": phone, "email": email]
         postResult("/api/contacts/save", body: body) { [weak self] ok in
             if ok { self?.refresh() }
             done(ok)
