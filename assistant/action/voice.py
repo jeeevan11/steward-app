@@ -48,12 +48,14 @@ def _format_sample(row: sqlite3.Row) -> str:
     return f"{header}{body}".strip()
 
 
-def voice_prefix(conn: sqlite3.Connection, contact_email: str, settings: Settings) -> str:
+def voice_prefix(conn: sqlite3.Connection, contact_email: str, settings: Settings,
+                 context_text: str = "") -> str:
     """Build the voice block appended to the drafting system prompt.
 
     Combines the stored global voice-profile summary (kv key "voice_profile") with
-    up to 5 few-shot samples, preferring ones written to this contact. Returns a
-    generic instruction when nothing is available.
+    up to 5 few-shot samples, preferring ones written to this contact. When `context_text`
+    (the thread being replied to) is given, the samples are picked by SIMILARITY to it so the
+    examples match the situation. Returns a generic instruction when nothing is available.
     """
     parts: list[str] = []
 
@@ -69,7 +71,8 @@ def voice_prefix(conn: sqlite3.Connection, contact_email: str, settings: Setting
 
     samples: list[sqlite3.Row] = []
     try:
-        samples = repo.get_voice_samples(conn, contact_email or "", limit=5)
+        samples = repo.get_voice_samples(conn, contact_email or "", limit=5,
+                                         context_text=context_text)
     except sqlite3.Error as exc:  # defensive: a DB hiccup must not block drafting
         log.warning("could not load voice samples: %s", exc)
 

@@ -1162,11 +1162,57 @@ def add_voice_sample(
     )
 
 
+_VOICE_WORD = re.compile(r"[a-z0-9']+")
+_VOICE_STOP = frozenset(
+    "the a an and or to of in is it its i you we us he she they them for on at be this that "
+    "with your my our as was are were will would can could just so if but not no yes do did "
+    "have has had me him her his their there here what when how why who".split()
+)
+
+
+def _voice_tokens(text: str) -> set[str]:
+    return {w for w in _VOICE_WORD.findall((text or "").lower())
+            if len(w) > 1 and w not in _VOICE_STOP}
+
+
 def get_voice_samples(
-    conn: sqlite3.Connection, contact_email: str = "", limit: int = 5
+    conn: sqlite3.Connection, contact_email: str = "", limit: int = 5, context_text: str = "",
 ) -> list[sqlite3.Row]:
-    """Return up to `limit` samples, preferring ones written to this contact, then
-    falling back to global samples — so drafts echo how you write to *this* person."""
+    """Return up to `limit` few-shot writing samples, preferring ones written to this contact,
+    then falling back to global samples — so drafts echo how you write to *this* person.
+
+    When `context_text` (the thread being replied to) is given, the samples are chosen by
+    SIMILARITY to it (token-set cosine) instead of plain recency, so the examples match the
+    SITUATION — a short casual ping gets short casual exemplars, a long formal email gets
+    formal ones — which is exactly what a few-shot is for. Falls back to recency when there's
+    no usable signal."""
+    ctx = _voice_tokens(context_text) if (context_text or "").strip() else set()
+
+    if ctx:
+        # Pull a larger candidate pool (contact-preferred, then global) and rank by similarity.
+        pool = max(limit * 8, 24)
+        cand: list[sqlite3.Row] = []
+        if contact_email:
+            cand = list(conn.execute(
+                "SELECT * FROM voice_samples WHERE contact_email=? ORDER BY ts DESC LIMIT ?",
+                (contact_email.lower(), pool)))
+        if len(cand) < pool:
+            cand.extend(conn.execute(
+                "SELECT * FROM voice_samples WHERE contact_email IS NULL ORDER BY ts DESC LIMIT ?",
+                (pool - len(cand),)))
+        if cand:
+            ce = (contact_email or "").lower()
+
+            def _score(r: sqlite3.Row) -> tuple[float, int, int]:
+                toks = _voice_tokens(((r["subject"] or "") + " " + (r["body"] or "")))
+                sim = (len(ctx & toks) / ((len(ctx) ** 0.5) * (len(toks) ** 0.5))) if toks else 0.0
+                is_contact = 1 if ((r["contact_email"] or "").lower() == ce and ce) else 0
+                return (sim, is_contact, int(r["ts"] or 0))   # similarity, then this-contact, then recency
+
+            cand.sort(key=_score, reverse=True)
+            return cand[:limit]
+        # nothing in the pool → fall through to the recency path
+
     rows: list[sqlite3.Row] = []
     if contact_email:
         rows = list(

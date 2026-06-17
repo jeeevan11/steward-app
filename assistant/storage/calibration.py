@@ -248,7 +248,15 @@ def calibrated(conn: sqlite3.Connection, raw_confidence: float) -> float:
             "SELECT accuracy, n FROM confidence_calibration WHERE bucket=?", (bucket,)
         ).fetchone()
         if row is not None and int(row["n"]) > 0:
-            return float(row["accuracy"])
+            n = int(row["n"])
+            acc = float(row["accuracy"])
+            # Shrinkage smoothing (empirical-Bayes): blend the bin's empirical accuracy toward
+            # the model's own raw confidence with PSEUDO pseudo-observations as the prior. This
+            # kills the metrics-honesty bug where an n=1 bin reads 0% or 100% and snaps the live
+            # autonomy/surface gate on a single (possibly mislabeled) sample. Large n → empirical
+            # accuracy dominates; small n → stays near the raw confidence. Result stays in [0,1].
+            PSEUDO = 5.0
+            return (acc * n + c * PSEUDO) / (n + PSEUDO)
     except Exception:  # noqa: BLE001
         pass
     return c

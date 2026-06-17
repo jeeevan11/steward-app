@@ -524,7 +524,13 @@ def api_decisions(conn: sqlite3.Connection = Depends(get_conn)):
             # message_id IS the identifier.
             "sender_identifier": sender_email or (mid if d is None else ""),
             "is_saved": rq._contact_info(conn, sender_email or (mid if d is None else ""))["is_saved"],
+            # ranking signals (consumed by rank_open_decisions; harmless extra keys for the UI)
+            "importance": rq._sender_importance(conn, mid),
+            "created_at": int(p["created_at"] or 0) if "created_at" in p.keys() else 0,
         })
+    # Order the visible queue the same way the headline is chosen: tier, then sender importance
+    # (coarse — never overrides tier), then recency. So the investor sits above the cold stranger.
+    items = rq.rank_open_decisions(items)
     return {"items": items}
 
 

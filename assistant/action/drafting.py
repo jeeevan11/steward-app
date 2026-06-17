@@ -227,7 +227,12 @@ def draft_reply(
         log.error("drafting prompt missing (%s); returning holding draft", exc)
         return _holding_draft(thread, final)
 
-    system_prefix = base_system + "\n\n" + voice.voice_prefix(conn, contact.email, settings)
+    # Pick the few-shot voice examples by SIMILARITY to this thread (subject + latest inbound),
+    # so a short casual ping gets short casual exemplars and a formal email gets formal ones.
+    _li = thread.latest_inbound
+    _ctx = ((thread.subject or "") + " " + ((_li.body_text or _li.snippet) if _li else "")).strip()
+    system_prefix = base_system + "\n\n" + voice.voice_prefix(
+        conn, contact.email, settings, context_text=_ctx)
 
     # P4a: give the drafter real open slots so it can propose meeting times (opt-in;
     # empty when calendar is off/unavailable). Never allowed to break drafting.

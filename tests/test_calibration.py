@@ -174,10 +174,26 @@ class TestCalibration(unittest.TestCase):
                 _add_decision(conn, message_id=mid, confidence=0.95, final_tier=3)
                 _add_event(conn, message_id=mid, type="approve" if i < 4 else "skip")
             calibration.compute(conn)
-            # raw 0.97 lands in 0.9-1.0 whose accuracy is 0.4
-            self.assertAlmostEqual(calibration.calibrated(conn, 0.97), 0.4)
+            # raw 0.97 lands in 0.9-1.0; empirical accuracy 0.4 is shrunk toward the raw
+            # confidence by sample count (n=10, PSEUDO=5): (0.4*10 + 0.97*5)/15 ≈ 0.59.
+            self.assertAlmostEqual(calibration.calibrated(conn, 0.97), (0.4 * 10 + 0.97 * 5) / 15)
+            self.assertLess(calibration.calibrated(conn, 0.97), 0.97)   # empirical pulled it down
+            self.assertGreater(calibration.calibrated(conn, 0.97), 0.4)  # smoothing keeps it above bare empirical
             # a bin with no data falls back to raw
             self.assertAlmostEqual(calibration.calibrated(conn, 0.15), 0.15)
+        finally:
+            conn.close()
+
+    def test_calibrated_smoothing_resists_single_sample(self):
+        """The metrics-honesty fix: an n=1 bin must NOT snap the gate to 0%/100%."""
+        conn = _fresh_conn()
+        try:
+            _add_decision(conn, message_id="solo", confidence=0.95, final_tier=3)
+            _add_event(conn, message_id="solo", type="skip")  # 1 sample → 0% bare empirical
+            calibration.compute(conn)
+            out = calibration.calibrated(conn, 0.95)
+            self.assertGreater(out, 0.5)   # NOT snapped to ~0.0 on one sample
+            self.assertLess(out, 0.95)     # but the lone miss did pull it below raw
         finally:
             conn.close()
 

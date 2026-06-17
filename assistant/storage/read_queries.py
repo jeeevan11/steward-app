@@ -684,23 +684,48 @@ def rank_open_decisions(rows: list) -> list:
         except (TypeError, ValueError):
             return default
 
-    def _key(r: Any) -> tuple[int, int, int]:
+    def _key(r: Any) -> tuple[int, int, int, int]:
         tier = _int(_get(r, "tier", 0), 0)
+        # Sender importance (0..100) bucketed COARSELY (0..4) so it only breaks ties WITHIN a
+        # tier — it can never override the tier itself, so the cardinal floors (needs-attention,
+        # VIP, money/legal) still decide the band. Within a pile of tier-3s the investor /
+        # co-founder (high importance) now headlines above a cold stranger. Default 0 when the
+        # caller didn't enrich the row (e.g. the pure-row tests), so behavior is unchanged.
+        bucket = min(4, max(0, _int(_get(r, "importance", 0), 0) // 25))
         created = _int(_get(r, "created_at", 0), 0)
         rid = _int(_get(r, "id", 0), 0)
-        # Negated so Python's ascending sort puts the highest tier / newest / largest-id
-        # FIRST. created_at recency breaks ties within a tier; id is the final stable key.
-        return (-tier, -created, -rid)
+        # Negated so Python's ascending sort puts the highest tier / most-important / newest /
+        # largest-id FIRST. importance breaks ties within a tier; created_at within importance.
+        return (-tier, -bucket, -created, -rid)
 
     return sorted(list(rows or []), key=_key)
+
+
+def _sender_importance(conn: sqlite3.Connection, message_id: str) -> int:
+    """The sender's learned importance (0..100) for a pending item — for queue ranking.
+    Resolves message_id → decision_log sender → contacts.importance. 0 when unknown."""
+    try:
+        from assistant.storage import decision_log
+        d = decision_log.get(conn, message_id)
+        email = ((d["sender_email"] if d else "") or "")
+        if not email:
+            return 0
+        row = conn.execute("SELECT importance FROM contacts WHERE email=?", (email,)).fetchone()
+        return int(row[0] or 0) if row else 0
+    except Exception:  # noqa: BLE001
+        return 0
 
 
 def top_open_decision(conn: sqlite3.Connection):
     """The single most urgent open decision (highest tier, then most recent), or None.
 
     This is the "one thing to handle first" the popover/headline should surface. Built on
-    the guarded repo.open_pending read seam plus rank_open_decisions (ux-trust-1)."""
-    ranked = rank_open_decisions(repo.open_pending(conn))
+    the guarded repo.open_pending read seam plus rank_open_decisions (ux-trust-1). Each row is
+    enriched with the sender's learned importance so a high-importance person headlines above a
+    cold stranger within the same tier."""
+    rows = [{**dict(r), "importance": _sender_importance(conn, r["message_id"])}
+            for r in repo.open_pending(conn)]
+    ranked = rank_open_decisions(rows)
     return ranked[0] if ranked else None
 
 

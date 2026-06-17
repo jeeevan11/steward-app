@@ -81,6 +81,26 @@ class TestRankOpenDecisions(unittest.TestCase):
         ranked = rq.rank_open_decisions(rows)
         self.assertEqual([r["message_id"] for r in ranked], ["b", "a"])
 
+    def test_importance_breaks_ties_within_a_tier(self):
+        # Two tier-3s: a high-importance sender (older) must headline above a cold stranger
+        # (newer), because importance breaks the within-tier tie.
+        rows = [
+            {"id": 1, "tier": 3, "created_at": 9000, "importance": 5, "message_id": "cold"},
+            {"id": 2, "tier": 3, "created_at": 1000, "importance": 90, "message_id": "investor"},
+        ]
+        self.assertEqual([r["message_id"] for r in rq.rank_open_decisions(rows)],
+                         ["investor", "cold"])
+
+    def test_tier_still_dominates_importance(self):
+        # The cardinal floors must win: a tier-3 from a nobody still beats a tier-2 from a
+        # max-importance VIP — importance only ever breaks ties WITHIN a tier, never across.
+        rows = [
+            {"id": 1, "tier": 3, "created_at": 1000, "importance": 0, "message_id": "t3_nobody"},
+            {"id": 2, "tier": 2, "created_at": 9000, "importance": 100, "message_id": "t2_vip"},
+        ]
+        self.assertEqual([r["message_id"] for r in rq.rank_open_decisions(rows)],
+                         ["t3_nobody", "t2_vip"])
+
 
 if __name__ == "__main__":
     unittest.main()
