@@ -19,7 +19,7 @@ final class AppConfig: ObservableObject {
     private init() {
         let defaults = UserDefaults.standard
         self.repoPath = defaults.string(forKey: "repoPath")
-            ?? (NSHomeDirectory() + "/Desktop/JatinDhull")
+            ?? (NSHomeDirectory() + "/steward")
         self.dashboardURL = defaults.string(forKey: "dashboardURL")
             ?? "http://127.0.0.1:8000"
     }
