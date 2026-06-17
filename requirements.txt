@@ -1,0 +1,26 @@
+# Core LLM — OpenRouter is OpenAI-compatible, so we use the openai client.
+openai>=1.40.0
+
+# Gmail
+google-api-python-client>=2.120.0
+google-auth>=2.29.0
+google-auth-oauthlib>=1.2.0
+
+# Telegram control surface
+python-telegram-bot>=21.0
+
+# Local web console (read+approve cockpit). Optional — the assistant runs without it.
+fastapi>=0.110.0
+uvicorn[standard]>=0.29.0
+
+# Config
+python-dotenv>=1.0.1
+
+# PDF attachment text extraction (best-effort; degrades gracefully if absent)
+pypdf>=4.2.0
+
+# NOTE: The testable core (brain tiers/guardrails, storage ledger, schema,
+# retrieval) depends ONLY on the Python standard library. You can run
+# `python -m pytest tests/` (or the bundled runner) without installing any of
+# the above. The packages here are needed only to actually connect to Gmail,
+# Telegram, and Anthropic when you go past dry-run wiring.

@@ -1,0 +1,15 @@
+{
+  "name": "cos-whatsapp-relay",
+  "private": true,
+  "type": "module",
+  "version": "0.1.0",
+  "description": "Dumb WhatsApp <-> Python pipe (Baileys). No intelligence here.",
+  "scripts": {
+    "start": "node whatsapp_relay.js"
+  },
+  "dependencies": {
+    "@whiskeysockets/baileys": "^6.7.9",
+    "pino": "^9.5.0",
+    "qrcode-terminal": "^0.12.0"
+  }
+}

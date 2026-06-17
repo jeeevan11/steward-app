@@ -1,0 +1,4 @@
+# Generated evaluation reports are run artifacts, not source. Keep the directory
+# (via .gitkeep) but ignore the timestamped JSON reports written by run_all.py.
+*.json
+!.gitkeep

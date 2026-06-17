@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  macOS launchd LaunchAgent for the chief-of-staff assistant.
+  This is a TEMPLATE — deploy/install_launchd.sh fills in the {{PLACEHOLDERS}}
+  and installs the result to ~/Library/LaunchAgents/.
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.cos.assistant</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>{{PYTHON}}</string>
+        <string>{{WORKDIR}}/run.py</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>{{WORKDIR}}</string>
+
+    <!-- Restart on crash, but NOT on a deliberate exit. -->
+    <key>RunAtLoad</key>
+    <true/>
+    <!--
+      config-secrets-deploy-2 ROOT CAUSE FIX
+      ──────────────────────────────────────
+      KeepAlive=<true/> was UNCONDITIONAL: it relaunched run.py after EVERY exit,
+      including a clean exit(1) that main() returns when required config is missing
+      (assistant/main.py missing_required → run.py exit 1). That turned a one-time
+      "your .env isn't set up" into a silent, permanent 30s respawn loop that never
+      self-heals and never alerts the owner (the very Telegram token needed to alert
+      is the thing that's missing) — a zombie install that looks loaded but does
+      nothing.
+
+      The launchd KeepAlive dict below relaunches ONLY when the process *Crashed*
+      (terminated abnormally — killed by a signal, e.g. OOM/SIGSEGV/SIGKILL). A
+      process that calls exit() with ANY status — including a config-error exit(1) —
+      did NOT "crash", so launchd treats that exit as deliberate and does NOT
+      respawn. Net effect:
+        * OOM / segfault / kill  → Crashed=true  → relaunched (resilience preserved)
+        * config-error exit(1)   → not a crash   → terminal (loop broken)
+        * clean shutdown exit(0) → not a crash   → terminal (as before)
+      This is additive: a real crash is still kept alive exactly as before; only the
+      pathological clean-exit respawn loop is removed. (The installer should still run
+      a doctor/preflight check and the engine should emit the config error through every
+      configured channel; both are out of scope for this template.)
+    -->
+    <key>KeepAlive</key>
+    <dict>
+        <key>Crashed</key>
+        <true/>
+    </dict>
+
+    <!-- Throttle restarts so a crash-loop doesn't hammer the machine. -->
+    <key>ThrottleInterval</key>
+    <integer>30</integer>
+
+    <key>StandardOutPath</key>
+    <string>{{WORKDIR}}/data/launchd.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>{{WORKDIR}}/data/launchd.err.log</string>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+</dict>
+</plist>

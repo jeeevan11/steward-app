@@ -1,0 +1,40 @@
+# Secrets & local state — never commit these
+.env
+secrets/
+data/
+*.db
+*.db-wal
+*.db-shm
+*.log
+
+# Web console frontend build artifacts
+node_modules/
+assistant/web/frontend/dist/
+
+# macOS menu-bar app build artifacts (Swift)
+mac/.build/
+mac/*.app/
+
+# WhatsApp relay local state (session = your linked-device creds; never commit)
+relay/session/
+relay/relay.log
+relay/status.json
+relay/outbox/
+relay/outbox_out/
+# Runtime contact state — contains the owner's real WhatsApp contacts; never ship.
+relay/contact_cache.json
+relay/lid_jid_map.json
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.DS_Store
+
+# Claude session / worktree state
+.claude/
+backups/

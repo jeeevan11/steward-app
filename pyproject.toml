@@ -1,0 +1,17 @@
+[project]
+name = "cos-assistant"
+version = "0.1.0"
+description = "Local-first AI communication assistant — a personal chief of staff for Gmail (Phase 1)."
+requires-python = ">=3.11"
+readme = "README.md"
+
+# Runtime deps are listed in requirements.txt to keep the testable core
+# stdlib-only. Install with: pip install -r requirements.txt
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+addopts = "-q"
+
+[tool.setuptools]
+packages = ["assistant"]

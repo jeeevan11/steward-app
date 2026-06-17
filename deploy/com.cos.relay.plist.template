@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- launchd LaunchAgent for the WhatsApp relay (node). install_all.sh fills the
+     {{PLACEHOLDERS}} and loads it. Keeps the Baileys bridge alive + restarts on crash.
+     NOTE: a WhatsApp *logout* makes the relay exit to force a re-pair; KeepAlive will
+     relaunch it, and it will print a QR — you must re-scan once. -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.cos.relay</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>{{NODE}}</string>
+        <string>{{WORKDIR}}/relay/whatsapp_relay.js</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>{{WORKDIR}}/relay</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    </dict>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>ThrottleInterval</key>
+    <integer>30</integer>
+    <key>StandardOutPath</key>
+    <string>{{WORKDIR}}/data/launchd.relay.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>{{WORKDIR}}/data/launchd.relay.err.log</string>
+    <key>ProcessType</key>
+    <string>Background</string>
+</dict>
+</plist>

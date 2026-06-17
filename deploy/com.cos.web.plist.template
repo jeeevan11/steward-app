@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- launchd LaunchAgent for the web console (run_web.py). install_all.sh fills the
+     {{PLACEHOLDERS}} and loads it. Keeps the :8000 console alive + restarts on crash. -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.cos.web</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>{{PYTHON}}</string>
+        <string>{{WORKDIR}}/run_web.py</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>{{WORKDIR}}</string>
+    <key>RunAtLoad</key>
+    <true/>
+    <!-- config-secrets-deploy-2: relaunch ONLY on an abnormal (Crashed) exit. A clean
+         exit(1) from a config error (api.main loads the same Settings) is treated as
+         deliberate and is terminal, not a silent 30s respawn loop. Matches the engine
+         plist; a real crash (OOM/SIGSEGV) is still kept alive exactly as before. -->
+    <key>KeepAlive</key>
+    <dict>
+        <key>Crashed</key>
+        <true/>
+    </dict>
+    <key>ThrottleInterval</key>
+    <integer>30</integer>
+    <key>StandardOutPath</key>
+    <string>{{WORKDIR}}/data/launchd.web.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>{{WORKDIR}}/data/launchd.web.err.log</string>
+    <key>ProcessType</key>
+    <string>Background</string>
+</dict>
+</plist>
