@@ -798,6 +798,19 @@ def api_contact_update(email: str, body: ContactUpdateBody,
     return service.update_contact(conn, email, flags=body.flags, importance=body.importance)
 
 
+class MuteBody(BaseModel):
+    muted: bool = True
+
+
+@app.post("/api/contacts/{email}/mute")
+def api_contact_mute(email: str, body: MuteBody, conn: sqlite3.Connection = Depends(get_conn)):
+    """Owner mutes/unmutes a sender ('never bother me' - silently handled, but guardrails still
+    surface anything truly consequential). Reversible. Owner action only; never sends."""
+    res = service.set_muted(conn, email, bool(body.muted))
+    _invalidate()
+    return res
+
+
 @app.post("/api/contacts/save")
 def api_contact_save(body: ContactSaveBody, conn: sqlite3.Connection = Depends(get_conn)):
     """Save an unknown/unsaved sender as a real contact (name + optional phone bridge).

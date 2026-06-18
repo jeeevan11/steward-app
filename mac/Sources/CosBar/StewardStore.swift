@@ -59,6 +59,7 @@ struct Person: Identifiable, Decodable, Equatable {
     let relationship: String
     let importance: Int
     let is_vip: Bool
+    var is_muted: Bool = false
     var flags: [String] = []
     // Recognition: false → an unsaved/unknown sender the owner can name + save in-app.
     // Tolerant of an older server that doesn't send these (defaults to "saved/known").
@@ -676,6 +677,16 @@ final class StewardStore: ObservableObject {
 
     func saveOwnerAbout(_ text: String, _ done: @escaping (Bool) -> Void = { _ in }) {
         postResult("/api/settings/about", body: ["about": text]) { ok in done(ok) }
+    }
+
+    /// Mute / unmute a sender ("never bother me" — silently handled, but guardrails still
+    /// surface anything truly consequential). Reversible. Reloads after the server confirms.
+    func setMuted(_ email: String, _ muted: Bool, _ done: @escaping (Bool) -> Void = { _ in }) {
+        let enc = email.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? email
+        postResult("/api/contacts/\(enc)/mute", body: ["muted": muted]) { [weak self] ok in
+            if ok { self?.refresh() }
+            done(ok)
+        }
     }
 
     /// Import the owner's macOS address book (Apple Contacts) into recognition — so anyone they

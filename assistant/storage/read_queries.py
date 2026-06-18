@@ -101,12 +101,14 @@ def source_link(message_id: str, thread_id: str, channel: str,
     if channel == "gmail":
         tid = (thread_id or message_id or "").strip()
         if tid:
-            # Pin the link to the CONNECTED Gmail account by EMAIL (not the "u/0" default-account
-            # index), so it opens the right account + exact thread even when other Google accounts
-            # are logged in and one of them is the browser default. Falls back to u/0 if unknown.
+            # Target the CONNECTED Gmail account by EMAIL via the `authuser` query param (Gmail's
+            # `u/<N>` path needs a NUMERIC index — putting an email there 404s). authuser routes
+            # to the matching account regardless of which is the browser default. The thread hash
+            # opens the exact thread. Falls back to the default account when the address is unknown.
             acct = (os.environ.get("GMAIL_ADDRESS", "") or "").strip()
-            u = acct if acct else "0"
-            return {"url": f"https://mail.google.com/mail/u/{u}/#all/{tid}", "label": "Open in Gmail"}
+            base = (f"https://mail.google.com/mail/u/0/?authuser={acct}"
+                    if acct else "https://mail.google.com/mail/u/0/")
+            return {"url": f"{base}#all/{tid}", "label": "Open in Gmail"}
         return {"url": "", "label": ""}
     # WhatsApp: prefer a resolved phone number, else extract from a phone JID.
     digits = ""
@@ -1027,6 +1029,7 @@ def list_contacts(conn: sqlite3.Connection, limit: int = 200) -> list[dict[str, 
             "relationship_type": repo.relationship_type_for_identifier(conn, prim_email),
             "importance": importance,
             "is_vip": importance >= 70 or "vip" in flags,
+            "is_muted": "mute" in flags,
             "flags": flags,
             "you_reply_pct": round(reply_rate * 100),
             "messages": messages,

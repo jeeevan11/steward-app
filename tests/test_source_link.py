@@ -20,18 +20,20 @@ class TestSourceLink(unittest.TestCase):
 
     def test_gmail_opens_exact_thread(self):
         s = rq.source_link("m1", "THREAD123", "gmail")
-        self.assertTrue(s["url"].startswith("https://mail.google.com/mail/u/"))
-        self.assertTrue(s["url"].endswith("/#all/THREAD123"))   # the exact thread
+        self.assertTrue(s["url"].startswith("https://mail.google.com/mail/u/0/"))
+        self.assertIn("#all/THREAD123", s["url"])   # the exact thread
         self.assertEqual(s["label"], "Open in Gmail")
 
     def test_gmail_link_pins_to_connected_account(self):
-        # with a connected account set, the link routes to THAT account (not u/0 default)
+        # with a connected account set, the link routes to THAT account via authuser (the
+        # u/<N> path needs a numeric index, so an email there 404s — use the authuser param).
         import os
         old = os.environ.get("GMAIL_ADDRESS")
         os.environ["GMAIL_ADDRESS"] = "me@gmail.com"
         try:
             s = rq.source_link("m1", "T9", "gmail")
-            self.assertEqual(s["url"], "https://mail.google.com/mail/u/me@gmail.com/#all/T9")
+            self.assertEqual(
+                s["url"], "https://mail.google.com/mail/u/0/?authuser=me@gmail.com#all/T9")
         finally:
             if old is None:
                 os.environ.pop("GMAIL_ADDRESS", None)
@@ -88,8 +90,8 @@ class TestSourceLink(unittest.TestCase):
             items = TestClient(webapi.app).get("/api/decisions").json()["items"]
             card = next((i for i in items if i["message_id"] == "gm1"), None)
             self.assertIsNotNone(card)
-            self.assertTrue(card["source_url"].startswith("https://mail.google.com/mail/u/"))
-            self.assertTrue(card["source_url"].endswith("/#all/TID9"))
+            self.assertTrue(card["source_url"].startswith("https://mail.google.com/mail/u/0/"))
+            self.assertIn("#all/TID9", card["source_url"])
             self.assertEqual(card["source_label"], "Open in Gmail")
         finally:
             webapi._settings = orig

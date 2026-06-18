@@ -176,6 +176,20 @@ def set_owner_about(conn: sqlite3.Connection, text: str) -> dict:
     return {"ok": True, "about": stored}
 
 
+def set_muted(conn: sqlite3.Connection, email: str, muted: bool) -> dict:
+    """Owner taps Mute/Unmute on a contact: 'never bother me' (silently handled) - but a
+    muted sender's genuinely consequential mail is STILL floored up by guardrails, so nothing
+    important is silently dropped. Preserves the contact's other flags. Reversible."""
+    c = repo.get_or_default_contact(conn, email)
+    if muted:
+        c.flags.add("mute")
+    else:
+        c.flags.discard("mute")
+    repo.upsert_contact(conn, c)
+    conn.commit()
+    return {"ok": True, "email": c.email, "muted": "mute" in c.flags}
+
+
 def update_contact(conn: sqlite3.Connection, email: str, *, flags=None, importance=None) -> dict:
     """Update a contact's flags and/or importance floor (guarded upsert)."""
     contact = repo.get_or_default_contact(conn, email)

@@ -347,6 +347,7 @@ struct DecisionDetailView: View {
     @State private var editing = false
     @State private var draft = ""
     @State private var showSave = false
+    @State private var muted = false
 
     /// Offer "Save contact" only when this is a genuinely unknown sender we have an
     /// identifier for (never for reminders, which are keyed by thread, not a person).
@@ -382,15 +383,29 @@ struct DecisionDetailView: View {
                         .font(Steward.F.meta).foregroundColor(Steward.C.t3)
                         .padding(.bottom, (canSaveContact || !decision.source_url.isEmpty) ? 8 : Steward.S.xl)
 
-                    // One click → the exact email thread / the WhatsApp chat.
-                    if !decision.source_url.isEmpty {
-                        Button { openSourceURL(decision.source_url) } label: {
-                            HStack(spacing: 5) {
-                                Image(systemName: "arrow.up.right.square")
-                                Text(decision.source_label.isEmpty ? "Open in source" : decision.source_label)
-                            }.font(Steward.F.meta).foregroundColor(Steward.C.t2)
-                        }.buttonStyle(.plain).help("Open the original conversation")
-                        .padding(.bottom, canSaveContact ? 8 : Steward.S.xl)
+                    // One click → the exact email thread / the WhatsApp chat. + Mute this sender.
+                    if !decision.source_url.isEmpty || !decision.sender_identifier.isEmpty {
+                        HStack(spacing: 14) {
+                            if !decision.source_url.isEmpty {
+                                Button { openSourceURL(decision.source_url) } label: {
+                                    HStack(spacing: 5) {
+                                        Image(systemName: "arrow.up.right.square")
+                                        Text(decision.source_label.isEmpty ? "Open in source" : decision.source_label)
+                                    }.font(Steward.F.meta).foregroundColor(Steward.C.t2)
+                                }.buttonStyle(.plain).help("Open the original conversation")
+                            }
+                            if !decision.sender_identifier.isEmpty && !muted {
+                                Button { StewardStore.shared.setMuted(decision.sender_identifier, true) { ok in if ok { muted = true } } } label: {
+                                    HStack(spacing: 5) {
+                                        Image(systemName: "bell.slash")
+                                        Text("Mute sender")
+                                    }.font(Steward.F.meta).foregroundColor(Steward.C.t3)
+                                }.buttonStyle(.plain)
+                                .help("Silently handle this sender from now on. Reversible in People. Anything truly consequential still reaches you.")
+                            } else if muted {
+                                Text("Muted ✓").font(Steward.F.meta).foregroundColor(Steward.C.t3)
+                            }
+                        }.padding(.bottom, canSaveContact ? 8 : Steward.S.xl)
                     }
 
                     // Unknown sender → let the owner name + save them right from the card.
@@ -929,8 +944,13 @@ struct PeopleView: View {
 struct EditablePersonRow: View {
     let ps: PersonState
     @State private var vip: Bool
+    @State private var muted: Bool
     @State private var showSave = false
-    init(ps: PersonState) { self.ps = ps; _vip = State(initialValue: ps.person.is_vip) }
+    init(ps: PersonState) {
+        self.ps = ps
+        _vip = State(initialValue: ps.person.is_vip)
+        _muted = State(initialValue: ps.person.is_muted)
+    }
     var body: some View {
         HStack(spacing: 14) {
             Circle().fill(Steward.C.raised).frame(width: 42, height: 42)
@@ -969,6 +989,12 @@ struct EditablePersonRow: View {
                 }.buttonStyle(.plain)
                 .help("Name this person and save them, so Steward stops treating them as unknown.")
             }
+            // Mute = "never bother me" (silently handled; guardrails still surface anything
+            // truly consequential). Toggling applies immediately — reversible.
+            Text("Mute").font(Steward.F.meta).foregroundColor(muted ? Steward.C.amber : Steward.C.t3)
+            Toggle("", isOn: $muted).labelsHidden().toggleStyle(.switch)
+                .onChange(of: muted) { v in StewardStore.shared.setMuted(ps.person.email, v) }
+                .help("Silently handle this sender. Reversible. Anything truly consequential still reaches you.")
             Text("VIP").font(Steward.F.meta).foregroundColor(vip ? Steward.C.amber : Steward.C.t3)
             Toggle("", isOn: $vip).labelsHidden().toggleStyle(.switch)
             if vip != ps.person.is_vip {
