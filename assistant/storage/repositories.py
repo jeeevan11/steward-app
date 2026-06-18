@@ -332,10 +332,20 @@ def save_contacts_bulk(
 
         # Reuse an already-linked person if any identifier resolves to one; else mint a new one.
         pid = next((person_link_get(conn, i) for i in idents if person_link_get(conn, i)), None)
-        if not pid:
+        new_person = pid is None
+        if new_person:
             pid = _uuid.uuid4().hex
+        # NO_AUTO_MERGE: only identifiers that are unlinked OR already belong to THIS person may
+        # enter its record. An identifier owned by a DIFFERENT person is left entirely alone - not
+        # linked, not bled into this person\'s phone_jids/emails arrays (those arrays are an
+        # authoritative identity signal read by identity resolution; contaminating them would
+        # silently fuse two real humans).
+        own = [i for i in idents if person_link_get(conn, i) in (None, pid)]
+        own_phones = [i for i in own if i in phones]
+        own_emails = [i for i in own if i in emails]
+        if new_person:
             person_add(conn, person_id=pid, display_name=name,
-                       emails=emails, phone_jids=phones)
+                       emails=own_emails, phone_jids=own_phones)
         else:
             # Reusing an existing person: adopt the book name ONLY if they aren't already an
             # owner-saved, named person — so the import never silently renames a contact the
@@ -348,15 +358,15 @@ def save_contacts_bulk(
             if p is not None:
                 ej = json.loads(p["phone_jids"] or "[]")
                 ee = json.loads(p["emails"] or "[]")
-                for ph in phones:
+                for ph in own_phones:
                     if ph not in [x.lower() for x in ej]:
                         ej.append(ph)
-                for em in emails:
+                for em in own_emails:
                     if em not in [x.lower() for x in ee]:
                         ee.append(em)
                 person_update(conn, pid, phone_jids=ej, emails=ee)
         set_person_saved(conn, pid, True)
-        for ident in idents:
+        for ident in own:                              # only ever link our own / unlinked ids
             if not person_link_get(conn, ident):       # never steal a foreign link
                 person_link_set(conn, ident, pid, confidence=1.0, source="address_book")
                 links += 1

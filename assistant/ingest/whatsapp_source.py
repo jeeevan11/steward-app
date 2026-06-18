@@ -302,12 +302,14 @@ def normalize(payload: dict[str, Any], settings: Settings, transcript: Optional[
     body = _body_for(payload, transcript)
     quoted = payload.get("quoted_body")
     if quoted:
-        # Make the reply-quote unambiguous: it is CONTEXT (the earlier message they're
-        # answering), never the message to respond to. The old "[replying to: X]\n<msg>"
-        # framing made the drafter echo X back (e.g. re-asking "where are you" after she
-        # already answered "Club me"). Attribute + separate so it reads as context.
-        body = (f"[context — this is a reply to an earlier message which said: "
-                f"\"{quoted}\". Do not repeat that line; respond to what they say next.]\n{body}")
+        # Mark the reply-quote as labelled CONTEXT (the earlier message being answered) so the
+        # drafter doesn't echo it back — but keep the marker as DATA, not an instruction, and
+        # defang+cap the sender-controlled quoted text (it reaches the drafter, which lacks the
+        # classifier's untrusted-isolation). The "treat as context, don't repeat" guidance lives
+        # in the TRUSTED drafting prompt, never in this untrusted body.
+        from assistant.brain.classifier import _defang
+        safe = _defang(str(quoted)).replace("\n", " ").strip()[:280]
+        body = f"[context: replying to an earlier message that said: \"{safe}\"]\n{body}"
     return Message(
         id=wa_id(str(payload.get("messageId", ""))),
         thread_id=jid or sender,

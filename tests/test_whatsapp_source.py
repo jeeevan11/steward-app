@@ -79,12 +79,12 @@ class TestNormalize(unittest.TestCase):
         self.assertEqual(m.body_text, "[image] look")
 
     def test_quoted_prefix(self):
-        # the reply-quote is rendered as CONTEXT (with a do-not-repeat instruction), so the
-        # drafter can't echo it back — but the quoted text is still present for the model.
+        # the reply-quote is rendered as labelled CONTEXT (inert data) so the drafter can't
+        # echo it back — the "don't repeat" guidance lives in the trusted drafting prompt.
         m = wa.normalize(dm_payload(quoted_body="earlier msg"), settings())
         self.assertIn("earlier msg", m.body_text)
         self.assertIn("context", m.body_text)
-        self.assertIn("Do not repeat", m.body_text)
+        self.assertNotIn("[replying to:", m.body_text)
 
 
 class TestGroupSkip(unittest.TestCase):
