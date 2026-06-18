@@ -1159,6 +1159,8 @@ struct TrustCenterView: View {
     @State private var aboutText = ""
     @State private var aboutLoaded = false
     @State private var aboutSaved = false
+    @State private var syncing = false
+    @State private var syncResult = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: Steward.S.lg) {
@@ -1171,6 +1173,32 @@ struct TrustCenterView: View {
                                                        set: { store.setPaused(!$0) }))
             row("Email", binding: Binding(get: { cfg.emailEnabled }, set: { engine.setEmail($0) }))
             row("WhatsApp", binding: Binding(get: { cfg.whatsappEnabled }, set: { engine.setWhatsApp($0) }))
+
+            // ── Sync phone contacts — recognize people by YOUR saved names ──
+            Divider().overlay(Steward.C.line).padding(.vertical, Steward.S.xs)
+            sectionLabel("Your contacts")
+            Text("Import your Mac's address book so Steward recognizes people by the names YOU "
+                 + "saved them as — the instant they message. Stays on your Mac; nothing is sent. "
+                 + "Re-run anytime to pick up new contacts.")
+                .font(Steward.F.meta).foregroundColor(Steward.C.t3).fixedSize(horizontal: false, vertical: true)
+                .padding(.bottom, 6)
+            HStack(spacing: 12) {
+                Button {
+                    syncing = true; syncResult = ""
+                    store.importPhoneContacts { ok, n in
+                        syncing = false
+                        syncResult = ok ? "Synced \(n) contacts ✓" : "Couldn't access Contacts — allow it in System Settings → Privacy."
+                    }
+                } label: {
+                    Text(syncing ? "Syncing…" : "Sync my phone contacts").font(Steward.F.meta)
+                        .foregroundColor(Steward.C.canvas)
+                        .padding(.horizontal, 18).padding(.vertical, 9)
+                        .background(Steward.C.onLight).clipShape(RoundedRectangle(cornerRadius: 9))
+                }.buttonStyle(.plain).disabled(syncing)
+                if !syncResult.isEmpty {
+                    Text(syncResult).font(Steward.F.meta).foregroundColor(Steward.C.t2).lineLimit(2)
+                }
+            }
 
             // ── About you — owner self-context that shapes how Steward prioritizes ──
             Divider().overlay(Steward.C.line).padding(.vertical, Steward.S.xs)

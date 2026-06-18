@@ -153,6 +153,15 @@ def reject_rule(conn: sqlite3.Connection, rule_id: str) -> dict:
     return {"ok": repo.set_proposed_rule_status(conn, rule_id, "rejected")}
 
 
+def import_address_book(conn: sqlite3.Connection, entries: list) -> dict:
+    """Owner taps 'Sync my phone contacts': import the macOS address book into the
+    recognition index so anyone they've saved is recognized by their saved name the instant
+    they message (by number or email). Recognition state only — never sends a message."""
+    res = repo.save_contacts_bulk(conn, entries)
+    conn.commit()
+    return {"ok": True, **res}
+
+
 def get_owner_about(conn: sqlite3.Connection) -> dict:
     """The owner's self-description shown in Settings → 'About you'."""
     return {"about": repo.get_owner_about(conn)}

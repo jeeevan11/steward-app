@@ -47,6 +47,7 @@ cat > "${APP}/Contents/Info.plist" <<'PLIST'
   <key>LSUIElement</key><true/>
   <key>NSPrincipalClass</key><string>NSApplication</string>
   <key>NSHighResolutionCapable</key><true/>
+  <key>NSContactsUsageDescription</key><string>Steward reads your contacts on your Mac to recognize people by the names you saved them as. Your contacts never leave your computer.</string>
   <key>NSAppTransportSecurity</key>
   <dict><key>NSAllowsLocalNetworking</key><true/></dict>
   <key>CFBundleURLTypes</key>

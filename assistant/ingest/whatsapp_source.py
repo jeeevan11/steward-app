@@ -302,7 +302,12 @@ def normalize(payload: dict[str, Any], settings: Settings, transcript: Optional[
     body = _body_for(payload, transcript)
     quoted = payload.get("quoted_body")
     if quoted:
-        body = f"[replying to: {quoted}]\n{body}"
+        # Make the reply-quote unambiguous: it is CONTEXT (the earlier message they're
+        # answering), never the message to respond to. The old "[replying to: X]\n<msg>"
+        # framing made the drafter echo X back (e.g. re-asking "where are you" after she
+        # already answered "Club me"). Attribute + separate so it reads as context.
+        body = (f"[context — this is a reply to an earlier message which said: "
+                f"\"{quoted}\". Do not repeat that line; respond to what they say next.]\n{body}")
     return Message(
         id=wa_id(str(payload.get("messageId", ""))),
         thread_id=jid or sender,
@@ -334,6 +339,25 @@ def _row_to_payload(row: sqlite3.Row) -> dict[str, Any]:
         "mentions": (row["mentions"] or "").split(",") if row["mentions"] else [],
         "timestamp": row["ts"],
     }
+
+
+def _bridge_lid_to_resolved_number(conn: sqlite3.Connection, lid: str, phone_number: str) -> None:
+    """When the relay hands us an @lid's real number, link the @lid to the person that already
+    owns that number (address-book seed or a prior save). Attach-only: never creates a new
+    person, never steals a link already pointing elsewhere, never merges two persons."""
+    from assistant.storage import repositories as repo
+    lid = (lid or "").strip().lower()
+    digits = "".join(c for c in (phone_number or "") if c.isdigit())
+    if not lid.endswith("@lid") or len(digits) < 7:
+        return
+    if repo.person_link_get(conn, lid):
+        return                                   # @lid already resolved — nothing to do
+    phone_jid = f"{digits}@s.whatsapp.net"
+    pid = repo.person_link_get(conn, phone_jid)
+    if not pid:                                  # try a trailing-national-digits match too
+        pid = repo.person_link_by_phone_digits(conn, digits)
+    if pid:
+        repo.person_link_set(conn, lid, pid, confidence=1.0, source="relay_resolved")
 
 
 def stamp_rule_flags(conn: sqlite3.Connection, sender_jid: str, push_name: str, settings: Settings) -> None:
@@ -387,6 +411,17 @@ def ingest_payload(conn: sqlite3.Connection, settings: Settings, payload: dict[s
     # Stamp personal flag now so it's set before the brain ever sees the contact.
     stamp_rule_flags(conn, (payload.get("sender_jid") or payload.get("jid") or ""),
                      payload.get("push_name", ""), settings)
+
+    # L2: if the relay resolved this @lid's real number, bridge the @lid onto whatever person
+    # already owns that number (e.g. one seeded from the address book) — so a privacy @lid
+    # auto-resolves to the saved name instead of fragmenting into a new unknown person. The
+    # relay-supplied number is WhatsApp's own equivalence (trusted), and we only ever ATTACH
+    # to an existing person, never steal a link or merge two persons (NO_AUTO_MERGE).
+    try:
+        _bridge_lid_to_resolved_number(
+            conn, (payload.get("sender_jid") or "").lower(), payload.get("phone_number") or "")
+    except Exception:  # noqa: BLE001 - best-effort linkage, never block intake
+        log.debug("lid→number bridge skipped (non-fatal)", exc_info=True)
 
     if should_skip_group(payload, settings):
         inbox.put(conn, mid, payload, status="skipped")

@@ -1,6 +1,7 @@
 import Foundation
 import Combine
 import SwiftUI
+import Contacts
 
 /// The redesigned data layer. Reads DECISIONS / PEOPLE / COMMITMENTS from the running
 /// engine's local API and exposes "significance" — never counts. Best-effort: on any
@@ -665,6 +666,57 @@ final class StewardStore: ObservableObject {
 
     func saveOwnerAbout(_ text: String, _ done: @escaping (Bool) -> Void = { _ in }) {
         postResult("/api/settings/about", body: ["about": text]) { ok in done(ok) }
+    }
+
+    /// Import the owner's macOS address book (Apple Contacts) into recognition — so anyone they
+    /// have saved is recognized by their saved name the instant they message. Asks for Contacts
+    /// permission once. Recognition-only; never sends anything. Calls done(ok, importedCount).
+    func importPhoneContacts(_ done: @escaping (Bool, Int) -> Void) {
+        let store = CNContactStore()
+        store.requestAccess(for: .contacts) { granted, _ in
+            guard granted else { DispatchQueue.main.async { done(false, 0) }; return }
+            var entries: [[String: Any]] = []
+            let keys: [CNKeyDescriptor] = [
+                CNContactGivenNameKey, CNContactFamilyNameKey, CNContactOrganizationNameKey,
+                CNContactPhoneNumbersKey, CNContactEmailAddressesKey,
+            ].map { $0 as CNKeyDescriptor }
+            let req = CNContactFetchRequest(keysToFetch: keys)
+            do {
+                try store.enumerateContacts(with: req) { c, _ in
+                    let full = "\(c.givenName) \(c.familyName)".trimmingCharacters(in: .whitespaces)
+                    let name = full.isEmpty ? c.organizationName : full
+                    let phones = c.phoneNumbers.map { $0.value.stringValue }
+                    let emails = c.emailAddresses.map { String($0.value) }
+                    if !name.isEmpty && (!phones.isEmpty || !emails.isEmpty) {
+                        entries.append(["name": name, "phones": phones, "emails": emails])
+                    }
+                }
+            } catch {
+                DispatchQueue.main.async { done(false, 0) }; return
+            }
+            self.postContactsImport(entries, done)
+        }
+    }
+
+    private func postContactsImport(_ entries: [[String: Any]],
+                                    _ done: @escaping (Bool, Int) -> Void) {
+        guard let url = URL(string: base + "/api/contacts/import") else { done(false, 0); return }
+        var req = URLRequest(url: url); req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        let token = AppConfig.shared.envValue("CONSOLE_TOKEN") ?? ""
+        if !token.isEmpty { req.setValue(token, forHTTPHeaderField: "X-Cos-Token") }
+        req.httpBody = try? JSONSerialization.data(withJSONObject: ["contacts": entries])
+        URLSession.shared.dataTask(with: req) { [weak self] data, resp, _ in
+            let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
+            var imported = 0
+            if let data, let o = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                imported = (o["imported"] as? Int) ?? 0
+            }
+            DispatchQueue.main.async {
+                if (200..<300).contains(code) { self?.refresh() }
+                done((200..<300).contains(code), imported)
+            }
+        }.resume()
     }
 
     func rebuildVoice() { post("/api/voice-profiles/rebuild", body: nil) }

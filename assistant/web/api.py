@@ -264,6 +264,16 @@ class OwnerAboutBody(BaseModel):
     about: str = ""               # the owner's free-text self-description
 
 
+class ImportContactEntry(BaseModel):
+    name: str = ""
+    phones: list[str] = []
+    emails: list[str] = []
+
+
+class ImportContactsBody(BaseModel):
+    contacts: list[ImportContactEntry] = []   # the owner's macOS address book
+
+
 class SnoozeBody(BaseModel):
     days: int = 2
 
@@ -788,6 +798,16 @@ def api_contact_save(body: ContactSaveBody, conn: sqlite3.Connection = Depends(g
         return {"ok": False, "error": "identifier and name are required"}
     res = service.save_contact(conn, ident, name, phone=(body.phone or "").strip(),
                                email=(body.email or "").strip())
+    _invalidate()
+    return res
+
+
+@app.post("/api/contacts/import")
+def api_contacts_import(body: ImportContactsBody, conn: sqlite3.Connection = Depends(get_conn)):
+    """Bulk-import the owner's macOS address book into recognition (Settings → 'Sync my phone
+    contacts'). Owner-only; recognition state only, never sends. Returns import counts."""
+    entries = [{"name": c.name, "phones": c.phones, "emails": c.emails} for c in body.contacts]
+    res = service.import_address_book(conn, entries)
     _invalidate()
     return res
 

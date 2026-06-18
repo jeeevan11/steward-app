@@ -301,6 +301,69 @@ def person_is_saved(conn: sqlite3.Connection, person_id: str) -> bool:
     return bool(row and row["is_saved_contact"])
 
 
+def save_contacts_bulk(
+    conn: sqlite3.Connection, entries: list[dict[str, Any]],
+) -> dict[str, int]:
+    """Bulk-import the owner's address book into the RECOGNITION INDEX. Each entry is
+    {"name": str, "phones": [str...], "emails": [str...]}. Per entry we seed ONE saved
+    person with every phone (as "<digits>@s.whatsapp.net") and every email as person_links —
+    so the saved name + recognition fire the instant any of those identifiers messages
+    (resolution funnels through person_link_get). It deliberately creates NO contacts rows,
+    so the People list isn't flooded with the whole phone book — a person surfaces there only
+    once they actually message. Idempotent; never STEALS an identifier already linked to a
+    different person, and never renames an already owner-saved person (NO_AUTO_MERGE). Writes
+    recognition state only — never a message. Returns {imported, links, skipped}."""
+    import uuid as _uuid
+
+    imported = links = skipped = 0
+    for e in (entries or []):
+        name = (str(e.get("name") or "")).strip()
+        phones: list[str] = []
+        for p in (e.get("phones") or []):
+            digits = "".join(c for c in str(p) if c.isdigit())
+            if len(digits) >= 7:                      # a plausible phone number
+                phones.append(f"{digits}@s.whatsapp.net")
+        emails = [s for s in ((str(em).strip().lower()) for em in (e.get("emails") or []))
+                  if "@" in s]
+        idents = list(dict.fromkeys(phones + emails))  # de-dup, stable order
+        if not name or not idents:
+            skipped += 1
+            continue
+
+        # Reuse an already-linked person if any identifier resolves to one; else mint a new one.
+        pid = next((person_link_get(conn, i) for i in idents if person_link_get(conn, i)), None)
+        if not pid:
+            pid = _uuid.uuid4().hex
+            person_add(conn, person_id=pid, display_name=name,
+                       emails=emails, phone_jids=phones)
+        else:
+            # Reusing an existing person: adopt the book name ONLY if they aren't already an
+            # owner-saved, named person — so the import never silently renames a contact the
+            # owner deliberately saved/merged (e.g. a manual "Simba").
+            prow = person_get(conn, pid)
+            cur = ((prow["display_name"] if prow else "") or "").strip()
+            if not (person_is_saved(conn, pid) and cur):
+                person_update(conn, pid, display_name=name)
+            p = person_get(conn, pid)
+            if p is not None:
+                ej = json.loads(p["phone_jids"] or "[]")
+                ee = json.loads(p["emails"] or "[]")
+                for ph in phones:
+                    if ph not in [x.lower() for x in ej]:
+                        ej.append(ph)
+                for em in emails:
+                    if em not in [x.lower() for x in ee]:
+                        ee.append(em)
+                person_update(conn, pid, phone_jids=ej, emails=ee)
+        set_person_saved(conn, pid, True)
+        for ident in idents:
+            if not person_link_get(conn, ident):       # never steal a foreign link
+                person_link_set(conn, ident, pid, confidence=1.0, source="address_book")
+                links += 1
+        imported += 1
+    return {"imported": imported, "links": links, "skipped": skipped}
+
+
 def bump_contact_stats(
     conn: sqlite3.Connection,
     email: str,
