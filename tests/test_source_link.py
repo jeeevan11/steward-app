@@ -20,8 +20,23 @@ class TestSourceLink(unittest.TestCase):
 
     def test_gmail_opens_exact_thread(self):
         s = rq.source_link("m1", "THREAD123", "gmail")
-        self.assertEqual(s["url"], "https://mail.google.com/mail/u/0/#all/THREAD123")
+        self.assertTrue(s["url"].startswith("https://mail.google.com/mail/u/"))
+        self.assertTrue(s["url"].endswith("/#all/THREAD123"))   # the exact thread
         self.assertEqual(s["label"], "Open in Gmail")
+
+    def test_gmail_link_pins_to_connected_account(self):
+        # with a connected account set, the link routes to THAT account (not u/0 default)
+        import os
+        old = os.environ.get("GMAIL_ADDRESS")
+        os.environ["GMAIL_ADDRESS"] = "me@gmail.com"
+        try:
+            s = rq.source_link("m1", "T9", "gmail")
+            self.assertEqual(s["url"], "https://mail.google.com/mail/u/me@gmail.com/#all/T9")
+        finally:
+            if old is None:
+                os.environ.pop("GMAIL_ADDRESS", None)
+            else:
+                os.environ["GMAIL_ADDRESS"] = old
 
     def test_whatsapp_phone_jid_uses_native_scheme(self):
         s = rq.source_link("wa_x", "t", "whatsapp", sender_email="918750715626@s.whatsapp.net")
@@ -73,7 +88,8 @@ class TestSourceLink(unittest.TestCase):
             items = TestClient(webapi.app).get("/api/decisions").json()["items"]
             card = next((i for i in items if i["message_id"] == "gm1"), None)
             self.assertIsNotNone(card)
-            self.assertEqual(card["source_url"], "https://mail.google.com/mail/u/0/#all/TID9")
+            self.assertTrue(card["source_url"].startswith("https://mail.google.com/mail/u/"))
+            self.assertTrue(card["source_url"].endswith("/#all/TID9"))
             self.assertEqual(card["source_label"], "Open in Gmail")
         finally:
             webapi._settings = orig

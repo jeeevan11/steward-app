@@ -10,6 +10,7 @@ Stdlib only — testable against an in-memory DB without FastAPI.
 from __future__ import annotations
 
 import json
+import os
 import re
 import sqlite3
 from typing import Any, Optional
@@ -100,7 +101,12 @@ def source_link(message_id: str, thread_id: str, channel: str,
     if channel == "gmail":
         tid = (thread_id or message_id or "").strip()
         if tid:
-            return {"url": f"https://mail.google.com/mail/u/0/#all/{tid}", "label": "Open in Gmail"}
+            # Pin the link to the CONNECTED Gmail account by EMAIL (not the "u/0" default-account
+            # index), so it opens the right account + exact thread even when other Google accounts
+            # are logged in and one of them is the browser default. Falls back to u/0 if unknown.
+            acct = (os.environ.get("GMAIL_ADDRESS", "") or "").strip()
+            u = acct if acct else "0"
+            return {"url": f"https://mail.google.com/mail/u/{u}/#all/{tid}", "label": "Open in Gmail"}
         return {"url": "", "label": ""}
     # WhatsApp: prefer a resolved phone number, else extract from a phone JID.
     digits = ""
