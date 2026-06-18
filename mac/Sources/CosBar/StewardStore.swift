@@ -24,6 +24,9 @@ struct Decision: Identifiable, Decodable, Equatable {
     // Tolerant of an older server (defaults: known sender, no identifier).
     var sender_identifier: String = ""
     var is_saved: Bool = true
+    // One-click backtrack to the source (exact Gmail thread / WhatsApp chat). Empty when none.
+    var source_url: String = ""
+    var source_label: String = ""
 
     /// ux-trust-2: kinds that are NOT a reply we'd send. A "reminder" is a proactive nudge
     /// (created by the relationship-reminder sweep) with no draft and a message_id that is a
@@ -134,6 +137,9 @@ struct HandledDetail: Equatable {
     var urgency = ""
     var undo = ""
     var confidence = ""
+    // One-click backtrack to the source (exact Gmail thread / WhatsApp chat).
+    var sourceURL = ""
+    var sourceLabel = ""
 }
 
 /// A learned/standing rule (from /api/rules + /api/rules/proposed).
@@ -569,6 +575,10 @@ final class StewardStore: ObservableObject {
                 d.sender = (a["from"] as? String) ?? d.sender
                 d.subject = (a["subject"] as? String) ?? d.subject
                 d.quote = (a["quote"] as? String) ?? ""
+            }
+            if let sl = o?["source_link"] as? [String: Any] {
+                d.sourceURL = (sl["url"] as? String) ?? ""
+                d.sourceLabel = (sl["label"] as? String) ?? ""
             }
             if let ai = o?["ai"] as? [String: Any] {
                 d.why = (ai["why"] as? String) ?? ""

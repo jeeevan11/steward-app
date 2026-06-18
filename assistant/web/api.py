@@ -520,6 +520,14 @@ def api_decisions(conn: sqlite3.Connection = Depends(get_conn)):
                     quote = meta["quote"].strip()
                 if (meta["channel"] or "").strip():
                     channel = meta["channel"].strip()
+        # One-click backtrack to the source: the exact Gmail thread, or the WhatsApp chat.
+        # (`channel` above is the display label "Email"/"WhatsApp"; source_link needs the
+        # canonical lowercase channel.)
+        _lc_channel = rq._channel(mid)
+        _src_ident = sender_email or (mid if d is None else "")
+        _wa_num = rq._wa_number_for(conn, _src_ident, mid) if _lc_channel == "whatsapp" else ""
+        _src = rq.source_link((d["message_id"] if d else mid),
+                              (d["thread_id"] if d else ""), _lc_channel, _src_ident, _wa_num)
         items.append({
             "id": p["id"], "message_id": mid, "tier": int(p["tier"] or 2),
             "title": title, "sentence": sentence, "kind": p["kind"],
@@ -529,6 +537,8 @@ def api_decisions(conn: sqlite3.Connection = Depends(get_conn)):
             "category": category,
             "channel": channel,
             "sender": sender,
+            "source_url": _src.get("url", ""),
+            "source_label": _src.get("label", ""),
             # Raw identifier + recognition, so the card can offer "Save contact" for an
             # unknown sender. For a reminder with no decision_log row, the JID-keyed
             # message_id IS the identifier.

@@ -9,6 +9,7 @@ Stdlib only — testable against an in-memory DB without FastAPI.
 
 from __future__ import annotations
 
+import json
 import re
 import sqlite3
 from typing import Any, Optional
@@ -87,14 +88,15 @@ def _wa_phone_number(conn: sqlite3.Connection, message_id: str) -> Optional[str]
 
 def source_link(message_id: str, thread_id: str, channel: str,
                 sender_email: str = "", phone_number: str = "") -> dict:
-    """Backtrack link to the ORIGINAL conversation — Gmail thread or WhatsApp chat.
-    Returns {"url": str, "label": str}; url is "" when we can't build one (e.g. a
-    LID WhatsApp contact whose real number we don't have).
+    """Backtrack link to the ORIGINAL conversation — Gmail thread (exact) or WhatsApp chat.
+    Returns {"url": str, "label": str}; url is "" when we can't build one (a LID WhatsApp
+    contact whose real number we don't have → the card shows "Save contact to open chat").
 
-      * Email   → https://mail.google.com/mail/u/0/#all/<thread_id>
-      * WhatsApp w/ phone → https://wa.me/<digits>  (opens that chat)
-      * WhatsApp LID only → web.whatsapp.com (best effort — opens WhatsApp, not the chat)
-    """
+      * Email   → https://mail.google.com/mail/u/0/#all/<thread_id>     (the exact thread)
+      * WhatsApp w/ number → whatsapp://send?phone=<digits>            (native app, that chat)
+
+    NOTE: WhatsApp exposes NO per-message deep link — the best any app can do is open the
+    CHAT (at its latest message). The Gmail link opens the precise thread."""
     if channel == "gmail":
         tid = (thread_id or message_id or "").strip()
         if tid:
@@ -110,9 +112,35 @@ def source_link(message_id: str, thread_id: str, channel: str,
         if suffix == "s.whatsapp.net" and local.isdigit():
             digits = local
     if digits:
-        return {"url": f"https://wa.me/{digits}", "label": "Open in WhatsApp"}
-    # LID-only contact — no number to deep-link; offer WhatsApp Web as a fallback.
-    return {"url": "https://web.whatsapp.com/", "label": "Open WhatsApp"}
+        # Native scheme → opens the WhatsApp desktop app directly in that chat.
+        return {"url": f"whatsapp://send?phone={digits}", "label": "Open in WhatsApp"}
+    # LID-only contact — no number to open a chat with; let the card prompt a Save instead.
+    return {"url": "", "label": ""}
+
+
+def _wa_number_for(conn: sqlite3.Connection, identifier: str, message_id: str = "") -> str:
+    """Best phone number (digits) for a WhatsApp identifier, so we can open its chat.
+    Tries: a phone JID directly -> the person's linked phone JID (address-book/saved) ->
+    the relay-resolved number. Returns '' for an unresolved @lid (no chat link possible)."""
+    ident = (identifier or "").strip().lower()
+    local = ident.split("@")[0]
+    if ident.endswith("@s.whatsapp.net") and local.isdigit():
+        return local
+    try:
+        pid = repo.person_link_get(conn, ident)
+        if pid:
+            prow = repo.person_get(conn, pid)
+            for j in json.loads((prow["phone_jids"] if prow else "[]") or "[]"):
+                jl = (j or "").lower()
+                if jl.endswith("@s.whatsapp.net") and jl.split("@")[0].isdigit():
+                    return jl.split("@")[0]
+    except Exception:  # noqa: BLE001
+        pass
+    if message_id:
+        ph = _wa_phone_number(conn, message_id)
+        if ph:
+            return re.sub(r"\D", "", ph)
+    return ""
 
 
 def _is_meaningful_name(name: str) -> bool:
@@ -804,7 +832,9 @@ def get_email(conn: sqlite3.Connection, message_id: str) -> Optional[dict[str, A
         "channel_label": CHANNEL_LABEL[ch],
         "channel_icon": CHANNEL_ICON[ch],
         "label": _tier_label(d["final_tier"]),
-        "source_link": source_link(message_id, d["thread_id"], ch, sender_email, _phone_number2 or ""),
+        "source_link": source_link(
+            message_id, d["thread_id"], ch, sender_email,
+            _wa_number_for(conn, sender_email, message_id) if ch == "whatsapp" else ""),
         "arrived": {
             "from": display,
             "from_raw": raw_name,

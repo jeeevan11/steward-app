@@ -1,4 +1,12 @@
 import SwiftUI
+import AppKit
+
+/// Open a backtrack URL (exact Gmail thread / WhatsApp chat) in the source app/browser.
+/// Uses NSWorkspace so custom schemes like whatsapp:// reach the desktop app.
+func openSourceURL(_ s: String) {
+    guard let url = URL(string: s) else { return }
+    NSWorkspace.shared.open(url)
+}
 
 /// The Steward app window — calm, editorial, organized around Decision / Person / Commitment.
 /// Single-focus: when a decision is in focus, the whole window is that one decision.
@@ -372,7 +380,18 @@ struct DecisionDetailView: View {
                     // who / what kind / where — context, always there.
                     Text("From \(decision.sender.isEmpty ? "someone" : decision.sender) · \(decision.category) · \(decision.channel)")
                         .font(Steward.F.meta).foregroundColor(Steward.C.t3)
+                        .padding(.bottom, (canSaveContact || !decision.source_url.isEmpty) ? 8 : Steward.S.xl)
+
+                    // One click → the exact email thread / the WhatsApp chat.
+                    if !decision.source_url.isEmpty {
+                        Button { openSourceURL(decision.source_url) } label: {
+                            HStack(spacing: 5) {
+                                Image(systemName: "arrow.up.right.square")
+                                Text(decision.source_label.isEmpty ? "Open in source" : decision.source_label)
+                            }.font(Steward.F.meta).foregroundColor(Steward.C.t2)
+                        }.buttonStyle(.plain).help("Open the original conversation")
                         .padding(.bottom, canSaveContact ? 8 : Steward.S.xl)
+                    }
 
                     // Unknown sender → let the owner name + save them right from the card.
                     if canSaveContact {
@@ -561,7 +580,18 @@ struct HandledDetailView: View {
                          + (detail.category.isEmpty ? "" : " · \(detail.category)")
                          + (detail.channel.isEmpty ? "" : " · \(detail.channel)"))
                         .font(Steward.F.meta).foregroundColor(Steward.C.t3)
+                        .padding(.bottom, detail.sourceURL.isEmpty ? Steward.S.xl : 8)
+
+                    // One click → the exact email thread / the WhatsApp chat.
+                    if !detail.sourceURL.isEmpty {
+                        Button { openSourceURL(detail.sourceURL) } label: {
+                            HStack(spacing: 5) {
+                                Image(systemName: "arrow.up.right.square")
+                                Text(detail.sourceLabel.isEmpty ? "Open in source" : detail.sourceLabel)
+                            }.font(Steward.F.meta).foregroundColor(Steward.C.t2)
+                        }.buttonStyle(.plain).help("Open the original conversation")
                         .padding(.bottom, Steward.S.xl)
+                    }
 
                     if !detail.why.isEmpty {
                         label("What Steward figured out")
