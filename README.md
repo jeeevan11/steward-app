@@ -12,6 +12,22 @@ It runs **on your own computer** — your messages and keys never leave your Mac
 
 ---
 
+## See it in action
+
+![Steward demo](docs/steward-demo.gif)
+
+Steward catches what matters, drafts a reply in your voice, and waits for one tap.
+**[▶ Watch the full 60-second demo](docs/steward-demo.mp4)**
+
+| | |
+|:--|:--|
+| ![Only what needs you](docs/shot-01-needs-you.png) | ![One clear decision](docs/shot-02-decision.png) |
+| **Only what needs you.** Four things to handle today. The rest filed away quietly. | **One clear decision.** Why it reached you, what they said, a reply in your voice, one tap to send. |
+| ![You're clear](docs/shot-03-all-clear.png) | ![Under the hood](docs/shot-04-console.png) |
+| **"You're clear."** 960 messages handled quietly today, about 34 hours of triage you never had to do. | **Under the hood.** Reads the whole thread, thinks, runs a safety check, then acts. |
+
+---
+
 ## What it does (in plain words)
 
 - 📥 **Reads your WhatsApp + email, 24/7** — every message, so it always has the full picture.
